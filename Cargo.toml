@@ -1,0 +1,12 @@
+[workspace]
+members = [
+    "apps/rustclip-macos",
+    "crates/rustclip-core",
+    "crates/rustclip-imaging",
+]
+resolver = "3"
+
+[profile.release]
+lto = true
+strip = true
+opt-level = "z"

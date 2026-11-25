@@ -1,0 +1,11 @@
+[package]
+name = "rustclip-imaging"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Pure-Rust image metadata and thumbnail generation for RustClip"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png", "tiff", "jpeg"] }

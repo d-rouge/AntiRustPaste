@@ -1,0 +1,309 @@
+# Architecture
+
+> Last reviewed: 2026-11-25 · Version 0.1.0
+
+RustClip is a single-process macOS accessory app. AppKit runs the main loop and
+a repeating `NSTimer` polls the pasteboard. There is no webview, database engine
+or async runtime. One background worker exists for thumbnails: it reads blobs,
+decodes them with `rustclip-imaging` and writes cache files; it never touches
+AppKit or `AppState`.
+
+The repository is a Cargo workspace:
+
+- `apps/rustclip-macos` — the implemented AppKit shell;
+- `crates/rustclip-core` — platform-neutral model, storage, settings, filtering
+  and thumbnail worker;
+- `crates/rustclip-imaging` — a pure-Rust, `#![forbid(unsafe_code)]` codec with
+  no AppKit, filesystem or environment access.
+
+Future Windows/Linux shells are `apps/rustclip-<os>`. They depend on core; core
+never depends on a shell. See [platforms.md](platforms.md).
+
+## Module map
+
+| Module | Responsibility |
+| --- | --- |
+| `apps/rustclip-macos/src/main.rs` | `--help`/`--version`; starts `app::run()` |
+| `apps/rustclip-macos/src/app.rs` | `NSApplicationDelegate`, thread-local `AppState`, status item and menu, clipboard polling, hot key, keyboard handling, all user actions, panic guards |
+| `apps/rustclip-macos/src/views.rs` | Objective-C classes: `RCClipPanel`, `RCClipListView`, `RCIgnoredAppsView`, `RCPanelDelegate`; construction of the popup and Preferences window |
+| `apps/rustclip-macos/src/pasteboard.rs` | Reads and writes `NSPasteboard` with type/size limits |
+| `apps/rustclip-macos/src/paste.rs` | CoreGraphics ⌘V synthesis and the Accessibility trust prompt |
+| `apps/rustclip-macos/src/hotkey.rs` | Carbon `RegisterEventHotKey` wrapper and shortcut formatting |
+| `apps/rustclip-macos/src/settings.rs` | `NSUserDefaults` keys, modifier migration, LaunchAgent management |
+| `apps/rustclip-macos/src/thumbnails.rs` | Boot-cleared cache path, private directory policy, `NSImage` loading |
+| `crates/rustclip-core/src/store.rs` | `Clip`/`Captured`, JSON index, blob files, dedup, trim, clear, previews, relative time |
+| `crates/rustclip-core/src/settings.rs` | Platform-neutral `Settings`, `IgnoredApp`, `Modifiers` bits |
+| `crates/rustclip-core/src/filter.rs` | `Section` (Text/Images) and search filtering |
+| `crates/rustclip-core/src/thumbnails.rs` | Thumbnail worker, file cache, prune/clear, generation epochs |
+| `crates/rustclip-imaging` | Pure-Rust image metadata and thumbnail generation (`image` crate) |
+
+`app.rs` is the macOS hub. Nothing else calls AppKit directly except `views.rs`
+(views), `thumbnails.rs` (loading a finished PNG into `NSImage` on the main
+thread) and `pasteboard.rs` (the pasteboard). `rustclip-core`,
+`rustclip-imaging` and the pure parts of `hotkey.rs` have no AppKit dependency.
+`docs/platforms.md` lists what every future shell must implement.
+
+## Startup
+
+```
+main
+ └── app::run
+      ├── NSApplication::sharedApplication
+      ├── activation policy Accessory (no Dock icon)
+      ├── AppDelegate retained in a thread-local
+      └── applicationDidFinishLaunching
+           └── setup_app  (guarded against panics)
+                ├── Settings::load
+                ├── Store::open, trim to the limit, save
+                ├── prune stale thumbnail files
+                ├── apply_start_at_login if enabled (rewrites the plist)
+                ├── record the initial pasteboard changeCount
+                ├── NSStatusItem + status menu
+                ├── build popup panel, search field, list, footer, panel delegate
+                ├── install AppState in the thread-local (starts the thumbnail worker)
+                ├── install key monitor, 1 s pasteboard poll and 0.1 s thumbnail drain
+                ├── register the Carbon hot key
+                └── optional automation hooks (RUSTCLIP_OPEN_*)
+```
+
+Autorelease pools and AppKit objects are created on the main thread. The only
+extra thread is the named `rustclip-thumbnails` worker started by
+`ThumbnailService::new`; every AppKit callback into Rust is still on the main
+thread.
+
+## State and threading
+
+`AppState` lives in a `thread_local! { RefCell<Option<AppState>> }`. `with_state`
+borrows it mutably for a short critical section.
+
+Two rules keep this safe:
+
+1. **Do not call re-entrant AppKit while holding the borrow.** `orderOut`,
+   `makeKeyAndOrderFront`, menu tracking (`popUpStatusItemMenu`), modal alerts,
+   `runOpenPanel` and delegate-backed `setStringValue` can all run a nested
+   event loop that calls back into Rust. Clone the `Retained` handles, release
+   the borrow, then call AppKit. This bug class caused the only known crash in
+   0.1.0 development.
+2. **Guard every OS entry point.** AppKit action/delegate methods, `NSTimer`
+   blocks, the `NSEvent` monitor and the Carbon handler run through
+   `app::guard`/`guard_value`. A panic that crosses `extern "C"` aborts instead
+   of unwinding; the guard turns it into a logged recovery.
+
+`MainThreadMarker` is obtained with a checked constructor in `run()` and with a
+documented unsafe `main_thread()` helper elsewhere, where the AppKit contract
+guarantees the thread.
+
+### Thumbnail worker
+
+```
+main thread                              rustclip-thumbnails worker
+-----------                              --------------------------
+draw Images row
+  ├─ in-memory hit? draw
+  ├─ cache file hit? load NSImage, draw
+  └─ miss: send Generate(hash, blob)
+       pending.insert(hash)
+                                      read blob (<= 64 MiB)
+                                      rustclip_imaging::thumbnail_png
+                                      write cache/thumb-<hash>.png atomically
+                                      send JobResult(hash, ok, generation)
+0.1 s timer: drain
+  ├─ ok -> NSImage::initWithData (main)
+  └─ err -> IMG placeholder / failed set
+```
+
+- The worker only owns `Receiver<Command>` and `Sender<JobResult>`. It does not
+  hold `AppState`, `Retained` objects or `MainThreadMarker`.
+- `Generate`, `Prune` and `Clear` are queued in order. `Clear` bumps a
+  generation so results from before the clear are discarded.
+- Pending hashes prevent duplicate jobs while a row is visible.
+- A failed job leaves an `IMG` placeholder; **Clear Thumbnail Cache** resets the
+  failure set.
+
+## Clipboard flow
+
+```
+1 s timer
+ └── poll_pasteboard
+      ├── NSPasteboard::changeCount unchanged? stop
+      ├── remember the frontmost non-RustClip app
+      ├── recording disabled? stop
+      ├── pasteboard::read_items
+      │    ├── skip org.nspasteboard.ConcealedType / TransientType
+      │    ├── up to 25 items
+      │    ├── file URL -> ClipKind::File
+      │    ├── PNG/TIFF -> ClipKind::Image, blob bytes (<= 50 MiB)
+      │    ├── RTFD/RTF/HTML -> rich clip + plain-text fallback (<= 50 MiB)
+      │    └── UTF-8/plain text -> ClipKind::Text
+      ├── ignored source app? stop
+      ├── Store::insert (hash dedup, move to top, write blob)
+      ├── trim to the configured limit
+      └── save, rebuild the recent menu, redraw the list
+```
+
+Polling is intentionally simple. `changeCount` is the only change signal; there
+is no polling of item contents and no global event tap.
+
+## Paste flow
+
+```
+list row / Enter / menu item
+ └── paste_store_index
+      ├── clone the Clip and resolve the target NSRunningApplication
+      ├── pasteboard::write_clip (clear, then the clip's best type)
+      ├── record the new changeCount so the write is not re-captured
+      ├── hide the panel
+      ├── activate the target app
+      ├── first time: AXIsProcessTrustedWithOptions prompt
+      └── 0.25 s one-shot NSTimer -> CGEvent ⌘V down/up
+```
+
+The target app is captured when the popup opens (or before the status menu is
+shown), not when the paste happens. If the target quit, `resolve_target_app`
+falls back to the last non-RustClip frontmost app by bundle id.
+
+## Popup and preferences
+
+`RCClipPanel` is a borderless `NSPanel` subclass with
+`NSWindowStyleMask::NonactivatingPanel`, level `NSStatusWindowLevel`, join-all-spaces
+and full-screen-auxiliary behaviour. Its content is an `NSVisualEffectView`
+(popover material) with rounded corners. The history rows are drawn by
+`RCClipListView::drawRect:`; only the visible range is painted. A segmented
+control switches between **Text** and **Images**; ⌘1/⌘2 do the same. The search
+field is the first responder, and a local key monitor handles arrows, Enter,
+Escape, Delete, ⌘1/⌘2 and ⌘C before AppKit's responder chain. Presentation is
+deferred by one 50 ms timer after a status-item click: making the panel key
+inside the mouse event lets the status bar take key back and immediately fires
+`windowDidResignKey`.
+
+Preferences are a regular `NSWindow` with an `NSTabView`:
+
+- **General** — max clippings, record toggle, confirm-before-delete, start at
+  login, shortcut recorder.
+- **Exceptions** — ignored apps in an `NSScrollView` with a custom list view and
+  Add/Remove buttons.
+
+The preferences window is built lazily on first open and kept alive in
+`AppState::prefs`; the panel delegate is stored separately because AppKit
+delegates are not retained.
+
+## Images and thumbnails
+
+```
+pasteboard PNG/TIFF/JPEG
+ └── pasteboard::read_items
+      ├── rustclip_imaging::info(bytes) -> width, height (32 MP cap)
+      └── Clip { kind: Image, width, height, blob, hash }
+           └── thumbnail view (Images tab)
+                ├── in-memory HashMap<hash, NSImage> hit -> draw
+                ├── cache hit -> NSImage::initWithData -> draw
+                └── miss -> queue Generate(hash, blob)
+                      └── worker: read blob, thumbnail_png(128),
+                                  write <cache>/thumb-<hash>.png,
+                                  send JobResult
+                           └── 0.1 s drain -> NSImage on main -> redraw
+```
+
+- Cache location: an absolute, dedicated `RUSTCLIP_THUMB_CACHE_DIR`, otherwise on macOS
+  `/tmp/RustClip-<user>-<hash>/thumbnails`. macOS clears `/tmp` at boot, so this
+  guarantees the cache is gone after a reboot. Other platforms use the OS temp
+  directory. For the default location the directory and its parent are private
+  (`0700`) and files are `0600` on Unix.
+- Thumbnails are never stored in `history.json`; the original blob is the source
+  of truth. Deleting the cache is safe and is exposed as **Clear Thumbnail
+  Cache** in Preferences. A legacy cache under `<OS temp>/RustClip/thumbnails` is
+  removed once at startup.
+- `thumbnails::prune_now` removes files whose hash is no longer in the history
+  at startup (synchronously, before the worker starts). `ThumbnailService::prune`
+  queues the same cleanup after delete/clear/limit changes, behind in-flight
+  jobs. Inserts prune files without dropping the in-memory images.
+- The imaging crate rejects empty data, unsupported formats, zero dimensions and
+  more than 32 million pixels. A zero thumbnail edge is an error; edges above
+  512 are clamped. It caps a decoded image at roughly 128 MiB of RGBA before
+  resizing.
+- Only the header/dimension parse (`info`) runs at capture on the main thread.
+  Full decode and PNG encoding happen on the worker. The first draw shows an
+  `IMG` placeholder; the 0.1 s drain timer installs the image and redraws. The
+  in-memory cache is capped at 256 entries (it clears when full). AppKit image
+  creation stays on the main thread.
+
+## Storage
+
+`rustclip_core::Store` uses `dirs::data_dir()/RustClip` by default, so each shell
+gets its platform data directory: on macOS `~/Library/Application
+Support/RustClip/`, Windows `%APPDATA%\RustClip\`, Linux
+`$XDG_DATA_HOME/rustclip/` (or the platform equivalent). `RUSTCLIP_DATA_DIR`
+overrides it.
+
+On macOS the default is `~/Library/Application Support/RustClip/`.
+
+```
+history.json     ordered array of Clip records, newest first
+blobs/<uuid>.bin image / RTF / HTML bytes
+```
+
+`Clip` fields: `id`, `kind`, `preview`, `text`, `data_type`, `blob`, `byte_len`,
+`width`, `height`, `source_name`, `source_bundle`, `date_ms`, `hash`. The image
+dimensions are optional and default to `None` for older histories.
+
+Guarantees:
+
+- `save` writes `history.json.tmp` and renames it over the index.
+- Unparseable JSON is renamed to `history.json.bak` and the app starts empty
+  instead of panicking.
+- Records whose blob file disappeared are dropped on load.
+- Dedup uses a hash of kind + text + data type + bytes; re-copying moves the
+  existing entry to the top and deletes its old blob before writing the new one.
+- Trim/remove/clear delete blob files only after they leave the index.
+
+Schema changes must keep existing JSON readable. The format currently has no
+version field; adding one is the first step before any breaking change.
+
+## Preferences and login item
+
+The **model** lives in `rustclip-core::Settings` and uses platform-neutral
+`Modifiers` bits. The **macOS persistence** in
+`apps/rustclip-macos/src/settings.rs` stores keys in `NSUserDefaults`
+(`maxClips`, `recordClips`, `confirmDelete`, `startAtLogin`, `ignoredApps`,
+`hotkeyKeyCode`, `hotkeyModifiers`, `hotkeyDisplay`, `hotkeyEnabled`), migrates
+old NSEvent modifier values and redirects to `RUSTCLIP_DEFAULTS_SUITE` in tests.
+Future shells implement their own persistence for the same core model.
+
+Start at login writes `~/Library/LaunchAgents/com.rustclip.app.plist` with the
+current executable path and `RunAtLoad`. It deliberately does **not** run
+`launchctl`, so enabling the option cannot kill or duplicate the running app.
+`RUSTCLIP_LAUNCH_AGENT_DIR` redirects the path in tests.
+
+## Global shortcut
+
+`hotkey.rs` calls Carbon's `RegisterEventHotKey` on the application event target.
+The handler is a plain C function and is panic-guarded. NSEvent modifier flags
+are converted to Carbon flags; the default is key code 9 (`V`) with Command and
+Shift. Registration failure is reported only when the user records a conflicting
+combination; the previous shortcut is restored.
+
+## Failure modes and responses
+
+| Failure | Response |
+| --- | --- |
+| Corrupt history JSON | rename to `.bak`, start empty, log the error |
+| Missing blob | drop the record on load |
+| Oversized or empty pasteboard data | skip the item |
+| Concealed pasteboard type | skip the whole change |
+| Hot key already taken | keep the old shortcut, beep and show an alert when recording |
+| Accessibility not granted | system prompt on first paste; the clipboard is still written |
+| Target app quit | fall back to the last frontmost app |
+| Thumbnail file missing/corrupt | regenerate from the blob on the worker; a corrupt file is overwritten |
+| Image decode failure | `IMG` placeholder in the Images tab; the clip is still pasteable |
+| Thumbnail worker cannot start | no thumbnails; the rest of the app works and failures stay non-fatal |
+| Thumbnail cache unwritable | `IMG` placeholder; history is unaffected |
+| Panic in a callback | caught by `guard`, logged, app continues |
+| State not initialized | invariant panic in `with_state`, caught if it happens inside a guarded callback |
+
+## Deliberate non-goals
+
+- Cloud sync or network access.
+- Multiple named clipboards.
+- Encryption at rest (the history is plain JSON; document this).
+- A plugin or scripting surface.
+- Copying another app's assets, icons or wording.

@@ -1,0 +1,223 @@
+# Platforms
+
+> Last reviewed: 2026-11-25 · Version 0.1.0
+
+RustClip is structured so the domain works on any desktop OS, while each OS has
+its own native shell. **Only macOS is implemented today.** Windows and Linux
+have a defined place in the tree and a concrete list of work, but no code yet.
+
+## Workspace layout
+
+```
+Cargo.toml                       workspace only
+apps/
+  rustclip-macos/                implemented AppKit shell
+    src/app.rs                   status item, state, actions, timers
+    src/views.rs                 NSPanel, history list, Preferences
+    src/pasteboard.rs            NSPasteboard read/write
+    src/paste.rs                 CoreGraphics ⌘V + Accessibility
+    src/hotkey.rs                Carbon RegisterEventHotKey
+    src/settings.rs              NSUserDefaults + LaunchAgent
+    src/thumbnails.rs            boot-cleared cache path + NSImage loader
+crates/
+  rustclip-core/                 platform-neutral domain
+    src/store.rs                 Clip/Captured, JSON + blobs, dedup, trim
+    src/settings.rs              Settings, IgnoredApp, Modifiers
+    src/filter.rs                Section and search filtering
+    src/thumbnails.rs            cache worker, jobs, prune, clear
+  rustclip-imaging/              pure-Rust image metadata + thumbnails
+```
+
+Future shells are added as `apps/rustclip-windows` and `apps/rustclip-linux`.
+They depend on core; core never depends on a shell.
+
+## Boundaries
+
+1. `rustclip-core` MUST NOT depend on AppKit, Win32, GTK, a UI toolkit, or a
+   platform clipboard API. Its only dependencies are `serde`, `serde_json`,
+   `chrono`, `uuid`, `dirs` and `rustclip-imaging`.
+2. `rustclip-imaging` MUST NOT depend on a UI toolkit, filesystem or environment
+   variables. It has `#![forbid(unsafe_code)]`.
+3. A platform shell owns:
+   - tray icon / menu bar item;
+   - popup window and its activation, focus, resign and positioning rules;
+   - native clipboard read/write and change notification;
+   - global hot key registration;
+   - synthetic paste and Accessibility/permission prompts;
+   - settings persistence and login-item installation;
+   - the thumbnail cache directory and native image type (e.g. `NSImage`).
+4. Core owns the data contract: `Captured`, `Clip`, `ClipKind`, `Store`,
+   `Settings`, `IgnoredApp`, `Modifiers`, `Section`, filtering and the
+   thumbnail generation worker.
+5. The core settings model uses platform-neutral `Modifiers` bits
+   (`SHIFT=1`, `CONTROL=2`, `OPTION=4`, `COMMAND=8`). Each shell converts to and
+   from its native modifier mask. macOS also migrates old `NSEvent` values.
+
+## Support matrix
+
+| Capability | macOS | Windows | Linux |
+| --- | --- | --- | --- |
+| Tray / menu bar | ✅ `NSStatusItem` | ⬜ Win32 `Shell_NotifyIcon` | ⬜ StatusNotifierItem / AppIndicator |
+| Popup | ✅ AppKit `NSPanel` | ⬜ Win32 borderless window or chosen UI toolkit | ⬜ GTK4 / chosen UI toolkit |
+| Clipboard text/image/RTF/HTML/file | ✅ `NSPasteboard` | ⬜ Win32 clipboard formats | ⬜ Wayland data-control / portal, X11 |
+| Clipboard change signal | ✅ `changeCount` poll | ⬜ `AddClipboardFormatListener` | ⬜ portal / X11 owner-change |
+| Global hot key | ✅ Carbon | ⬜ `RegisterHotKey` | ⬜ X11 `XGrabKey`; Wayland portal |
+| Synthetic paste | ✅ CGEvent + Accessibility | ⬜ `SendInput` + UIAccess | ⬜ XTest; Wayland portal/ydotool |
+| Settings persistence | ✅ `NSUserDefaults` | ⬜ registry or JSON | ⬜ JSON (XDG config) |
+| Start at login | ✅ LaunchAgent | ⬜ Startup folder / Run key | ⬜ XDG autostart `.desktop` |
+| Thumbnail image loading | ✅ `NSImage` | ⬜ decoder → texture/bitmap | ⬜ decoder → texture/bitmap |
+| Thumbnail cache path | ✅ `/tmp/...` (boot-cleared) | ⬜ `%TEMP%\RustClip` | ⬜ `$XDG_CACHE_HOME`/tmp |
+| Tests | ✅ 5 shell + 17 core + 10 imaging | ⬜ | ⬜ |
+
+Legend: ✅ done, ⬜ not implemented.
+
+## macOS (implemented)
+
+- Menu bar item with the highlighter-and-check template icon (tooltip
+  `RustClip — clipboard history`).
+- Left-click toggles the popup; right-click opens the status menu.
+- Popup: search, Text/Images tabs, keyboard navigation, paste, delete, clear.
+- Native pasteboard capture: text, RTF/RTFD, HTML, PNG/TIFF/JPEG images, file
+  URLs. Concealed/transient items are skipped.
+- Preferences: max clips, recording, confirmations, login item, shortcut
+  recorder, ignored apps, clear thumbnail cache.
+- Global shortcut through Carbon; paste through CGEvent with Accessibility.
+- Thumbnail cache under `/tmp/RustClip-<user>-<hash>/thumbnails`, cleared by
+  macOS at boot; one worker thread generates thumbnails.
+
+Files: `apps/rustclip-macos/src/`.
+
+Known macOS gaps: no per-row accessibility elements in the hand-drawn list, no
+image grid, EXIF orientation is not applied, no encryption at rest.
+
+## Clipboard backend candidates
+
+For a new shell, evaluate these in order:
+
+1. **Native clipboard API** — best fidelity and permissions behaviour, but one
+   implementation per OS (macOS already uses `NSPasteboard`).
+2. **`clipboard-rs`** — one MIT-licensed crate for text, HTML, RTF, images, file
+   lists, custom types and change notifications; has a Wayland feature. Closest
+   match to RustClip's format matrix. It is younger than `arboard`, so test
+   hostile formats and each desktop before relying on it.
+3. **`arboard` + `clipboard-master`** — a solid pair for text/images/HTML/file
+   lists. `arboard` has no watcher and does not expose RTF; `clipboard-master`
+   only delivers change notifications and, on macOS, implements them with
+   `NSPasteboard::changeCount` polling (so it does not remove polling there).
+   It is a reasonable choice if rich text and exact encoded bytes are not
+   required.
+
+RustClip's macOS shell deliberately keeps the native API: it needs exact UTIs,
+RTF/RTFD/HTML/file URLs, concealed-type handling and original encoded bytes.
+`rustclip-core` only sees `Captured`/`Clip`, so a future shell can choose any of
+these without changing storage or UI code.
+
+## Windows (not implemented)
+
+Recommended first tasks, in order:
+
+1. Create `apps/rustclip-windows` with a Win32 tray icon
+   (`Shell_NotifyIcon`) and a native menu (`TrackPopupMenu`).
+2. Clipboard adapter: `AddClipboardFormatListener`, `GetClipboardData` for
+   `CF_UNICODETEXT`, `CF_DIBV5`/PNG, RTF, HTML and `CF_HDROP`; write the same
+   formats back. Map them to `Captured`/`Clip`.
+3. Popup window: borderless `WS_POPUP` window, `SetForegroundWindow`,
+   position under the tray icon using the monitor work area; hide on
+   `WM_KILLFOCUS` unless the tray icon was clicked (same 150 ms debounce as
+   macOS).
+4. Hot key: `RegisterHotKey`/`WM_HOTKEY`; persist core `Modifiers` to `MOD_*`.
+5. Paste: `SendInput` with Ctrl+V; do not require administrator rights.
+6. Settings: registry (`HKCU\Software\RustClip`) or JSON in `%APPDATA%`.
+7. Login item: Startup folder shortcut or `HKCU\...\Run`.
+8. Thumbnail cache: `%TEMP%\RustClip\thumbnails`, delete on logout/reboot via
+   the OS or a startup sweep; load PNG into the UI's image type.
+9. Smoke test and docs.
+
+Windows has the fewest platform caveats: tray click events, global hot keys and
+synthetic input are all supported without a portal.
+
+## Linux (not implemented)
+
+Start with **X11**, then add Wayland deliberately:
+
+1. Tray: StatusNotifierItem/AppIndicator. **Click events are not reliable on
+   all desktops** (especially GNOME without an extension), so always provide a
+   menu item “Show History” and a global shortcut as fallbacks.
+2. Popup: GTK4/`libadwaita` or the chosen UI toolkit. Position under the tray
+   icon when coordinates are available; otherwise center on the active monitor.
+3. Clipboard:
+   - X11: selections + owner-change events.
+   - Wayland: `wlr-data-control`/portal where available; clipboard monitoring is
+     restricted by design on some compositors.
+4. Hot key:
+   - X11: `XGrabKey`.
+   - Wayland: XDG Desktop Portal `GlobalShortcuts`; not all compositors expose
+     it. Document the dependency.
+5. Paste:
+   - X11: XTest.
+   - Wayland: portal/`ydotool`; do not assume it works everywhere.
+6. Settings: JSON under `$XDG_CONFIG_HOME/rustclip/settings.json`.
+7. Login item: `$XDG_CONFIG_HOME/autostart/rustclip.desktop`.
+8. Thumbnail cache: `$XDG_CACHE_HOME/rustclip/thumbnails` or a boot-cleared
+   temporary directory; use one worker from core.
+
+Linux is the hardest platform because of tray click delivery and Wayland input
+restrictions. Treat “works on my desktop” as insufficient; list the tested
+desktop/compositor in the PR/handoff.
+
+## What core already gives a new shell
+
+- `Store::open`, `Store::open_at`, insert/dedup/trim/remove/clear, atomic JSON
+  saves, corrupt-index quarantine, blob validation and missing-blob recovery.
+- Preview normalisation, relative time, human-readable sizes.
+- `Settings` and `IgnoredApp` models; `Modifiers` bits independent of any OS.
+- `Section` and `filter_indices(clips, section, query)`.
+- `ThumbnailService` with one worker, pending-job de-duplication, generation
+  epochs, prune and clear; `prune_now(dir, valid)` for startup.
+- `rustclip_imaging::info` and `thumbnail_png` with 32 MP/512 px caps.
+
+## What every shell still has to implement
+
+- A tray item and a popup lifecycle that matches the OS conventions.
+- Clipboard change detection and format conversion to `Captured`.
+- Writing a `Clip` back in the best native format.
+- Global hot key registration and a display string for the shortcut.
+- Synthetic paste plus the OS permission flow.
+- Settings persistence and login-item installation.
+- A cache directory policy and conversion of PNG bytes to the UI image type.
+- Keyboard handling, accessibility, screen/multi-display positioning, and
+  click-away behaviour.
+
+## Adding a platform: checklist
+
+- [ ] Create `apps/rustclip-<os>/Cargo.toml` depending on `rustclip-core` and
+      `rustclip-imaging`; add it to workspace `members`.
+- [ ] Implement `main` with `--help`/`--version` and the same environment hooks
+      where meaningful.
+- [ ] Map native clipboard formats ↔ `rustclip_core::Captured`/`Clip`; keep the
+      25-item and 50 MiB limits.
+- [ ] Map native modifier flags ↔ `rustclip_core::Modifiers`; migrate old
+      settings if needed.
+- [ ] Reuse core filtering, storage and thumbnail worker; do not duplicate them.
+- [ ] Implement tray + popup, including click-to-toggle and click-away.
+- [ ] Implement hot key, paste and permission handling.
+- [ ] Choose a cache directory and native image loader.
+- [ ] Implement settings persistence and login item.
+- [ ] Add a smoke script and update `docs/platforms.md`, `README.md` and
+      `AGENTS.md`.
+- [ ] List tested OS versions/desktops in the handoff.
+
+## Environment variables today
+
+| Variable | Scope | Meaning |
+| --- | --- | --- |
+| `RUSTCLIP_DATA_DIR` | core | history directory override |
+| `RUSTCLIP_DEFAULTS_SUITE` | macOS shell | isolated `NSUserDefaults` suite |
+| `RUSTCLIP_LAUNCH_AGENT_DIR` | macOS shell | login-item plist directory |
+| `RUSTCLIP_THUMB_CACHE_DIR` | macOS shell | absolute, dedicated thumbnail cache |
+| `RUSTCLIP_OPEN_PREFS` | macOS shell | automation: open Preferences |
+| `RUSTCLIP_OPEN_PANEL` | macOS shell | automation: open popup |
+| `RUSTCLIP_OPEN_IMAGES` | macOS shell | automation: open popup on Images |
+
+Future shells should keep `RUSTCLIP_DATA_DIR` and add equivalents for their
+native settings/login-item locations.

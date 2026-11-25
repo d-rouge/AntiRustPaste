@@ -100,6 +100,11 @@ Agents MUST NOT grant, revoke or script this permission. Ask the operator.
 
 Set `RUSTCLIP_UNIVERSAL=1` to build both slices and `lipo` them into a universal
 binary (`rustup target add aarch64-apple-darwin x86_64-apple-darwin` first).
+
+If `cargo` comes from Homebrew instead of rustup, the rustup-installed standard
+library is invisible to it and cross-builds fail with "can't find crate for
+`core`". Put the rustup toolchain's `bin` directory first in `PATH` or use a
+rustup-managed shell; GitHub's runners always use rustup.
 Tag-driven releases are built and published by
 [`.github/workflows/release.yml`](../.github/workflows/release.yml); the process
 is in [releasing.md](releasing.md).

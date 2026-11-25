@@ -126,7 +126,10 @@ fn placement(width: u32, height: u32) -> Result<(f64, f64, f64, f64), Error> {
     let content_height = A4_HEIGHT_PT - 2.0 * MARGIN_PT;
     let image_width = width as f64;
     let image_height = height as f64;
-    let scale = (content_width / image_width).min(content_height / image_height);
+    // Scale down only when the image would not fit the printable area. Smaller
+    // images keep their native size (1 pixel = 1 point at 72 dpi).
+    let fit = (content_width / image_width).min(content_height / image_height);
+    let scale = fit.min(1.0);
     let draw_width = image_width * scale;
     let draw_height = image_height * scale;
     let offset_x = MARGIN_PT + (content_width - draw_width) / 2.0;
@@ -254,10 +257,29 @@ mod tests {
     fn image_content_is_flipped_upright() {
         // Samples arrive top row first; the content stream negates the height
         // and moves the origin to the top edge so the page is not upside down.
+        // The 2×2 fixture is smaller than the printable area, so it keeps its
+        // native size.
         let pdf = write_pdf(&[image()]).expect("pdf");
         let text = String::from_utf8_lossy(&pdf);
-        assert!(text.contains("527.276 0 0 -527.276 34.000 684.583 cm"));
-        assert!(!text.contains("0 0 527.276 34.000 157.307 cm"));
+        assert!(text.contains("2.000 0 0 -2.000 296.638 421.945 cm"));
+        assert!(!text.contains("0 0 2.000 296.638 419.945 cm"));
+    }
+
+    #[test]
+    fn large_images_are_scaled_to_fit_and_small_ones_keep_their_size() {
+        let (width, height, _, y) = placement(2000, 1000).expect("landscape");
+        assert!((width - 527.276).abs() < 0.001);
+        assert!((height - 263.638).abs() < 0.001);
+        assert!((y - 289.126).abs() < 0.01);
+
+        let (width, height, x, y) = placement(100, 50).expect("small");
+        assert!((width - 100.0).abs() < 0.001);
+        assert!((height - 50.0).abs() < 0.001);
+        assert!((x - 247.638).abs() < 0.001);
+        assert!((y - 395.945).abs() < 0.001);
+
+        let (width, _, _, _) = placement(400, 4000).expect("portrait");
+        assert!((width - 77.389).abs() < 0.01);
     }
 
     #[test]

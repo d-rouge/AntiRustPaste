@@ -147,7 +147,9 @@ is chosen the app:
 
 1. reads the original blobs (not thumbnails) for the selected images;
 2. builds one A4 page per image in list order, centring each image with a 12 mm
-   margin and preserving its aspect ratio;
+   margin and preserving its aspect ratio; an image larger than the printable
+   area is scaled down to fit, a smaller one keeps its native size (1 pixel =
+   1 point);
 3. decodes each image to 8-bit RGB, compositing transparency onto white, and
    compresses the samples with Flate;
 4. writes the complete PDF to a temporary file next to the destination and

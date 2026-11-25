@@ -584,6 +584,8 @@ fn draw_pdf_selection(view: &PdfSelectionView) {
             if *selected {
                 accent.setFill();
                 box_path.fill();
+                // The view is flipped, so y grows downwards: draw the check
+                // down from the left arm to the bottom vertex, then up-right.
                 let check = NSBezierPath::new();
                 check.moveToPoint(NSPoint::new(
                     checkbox.origin.x + 4.0,
@@ -591,11 +593,11 @@ fn draw_pdf_selection(view: &PdfSelectionView) {
                 ));
                 check.lineToPoint(NSPoint::new(
                     checkbox.origin.x + 7.0,
-                    checkbox.origin.y + 4.5,
+                    checkbox.origin.y + 11.5,
                 ));
                 check.lineToPoint(NSPoint::new(
                     checkbox.origin.x + 12.0,
-                    checkbox.origin.y + 11.0,
+                    checkbox.origin.y + 5.0,
                 ));
                 white.setStroke();
                 check.setLineWidth(1.6);

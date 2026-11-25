@@ -84,7 +84,9 @@ removed only by an explicit delete or clear action.
   `Clipboard Images.pdf`.
 - `crates/rustclip-pdf` is a pure-Rust, `#![forbid(unsafe_code)]` writer: one A4
   page per image, 12 mm margins, aspect ratio preserved, original blobs decoded
-  through `rustclip-imaging`, RGB samples compressed with Flate.
+  through `rustclip-imaging`, RGB samples compressed with Flate. Images larger
+  than the printable area are scaled to fit; smaller ones keep their native
+  size.
 - The PDF is written to `<name>.pdf.tmp` and renamed into place; cancelling the
   dialog or a failure leaves no partial file.
 - Unit tests cover the container, cross-reference offsets, page count, upright

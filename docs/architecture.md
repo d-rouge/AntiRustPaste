@@ -265,7 +265,8 @@ PDF window
 - The writer emits the catalogue, page tree, one page and content stream per
   image and one `/DeviceRGB` image XObject compressed with Flate. Rows are
   negated in height because image samples start at the top while PDF user space
-  grows upwards.
+  grows upwards. Placement scales an image down only when it exceeds the
+  printable area; smaller images keep 1 px = 1 pt.
 - Encoding runs on the main thread: the input is bounded by the history limit,
   the 50 MiB blob cap and the 32 MP imaging cap, and no second worker is allowed
   without the operator's approval.

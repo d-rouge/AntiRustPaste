@@ -192,6 +192,16 @@ fn dot_color(kind: ClipKind) -> Retained<NSColor> {
 }
 
 fn draw_list(view: &ClipListView) {
+    // AppKit hands this flipped view a dirty rect that reaches above its own
+    // bounds while the panel is scrolled, so clip explicitly: rows, the card
+    // and the group headers must never paint over the search field or footer.
+    NSGraphicsContext::saveGraphicsState_class();
+    NSBezierPath::bezierPathWithRect(view.bounds()).addClip();
+    draw_list_contents(view);
+    NSGraphicsContext::restoreGraphicsState_class();
+}
+
+fn draw_list_contents(view: &ClipListView) {
     let bounds = view.bounds();
     let width = bounds.size.width;
     let height = bounds.size.height;

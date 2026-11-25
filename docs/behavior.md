@@ -72,7 +72,9 @@ when they point at an image.
   search results; it is disabled when that section is empty. On the Images tab
   a **PDF…** button appears between the count and **Clear Text**; the footer
   hint reads `⌘E PDF` there instead of `⌘P pin`.
-- The list scrolls with the wheel/trackpad and clamps to its content.
+- The list scrolls with the wheel/trackpad and clamps to its content. Drawing
+  stops at the list edges, so rows and the pinned card never cover the search
+  field or the footer.
 - Relative time: `just now`, `Nm ago`, `Nh ago`, `Nd ago`, then `Mon D`.
 - Preview normalisation: runs of whitespace collapse to one space, leading and
   trailing whitespace is removed, and the preview stops at 160 characters.

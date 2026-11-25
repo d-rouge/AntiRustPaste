@@ -185,7 +185,10 @@ a tilting accent SF Symbol pin inside a rounded card under a **PINNED** header.
 `ListLayout` (in `app.rs`) owns the row geometry: header heights, group
 offsets, the pinned card, hit-testing and the visible range. Drawing, click
 mapping, scrolling and keyboard navigation all go through it, so headers are
-gaps rather than clickable rows. Presentation is
+gaps rather than clickable rows. `draw_list` clips drawing to the list bounds
+explicitly: while the popover scrolls, AppKit can hand this flipped view a dirty
+rect that reaches above its frame, and without the clip the pinned card and rows
+painted over the search field and footer. Presentation is
 deferred by one 50 ms timer after a status-item click: making the panel key
 inside the mouse event lets the status bar take key back and immediately fires
 `windowDidResignKey`.

@@ -99,6 +99,7 @@ RUSTCLIP_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
 | 22e | Unpin a row | Row leaves the pinned group; explicit delete still removes it |
 | 22f | History with pinned and unpinned clips | **PINNED** header and rounded card above **RECENT**; accent pin on pinned rows; headers scroll and do nothing when clicked |
 | 22g | Click the first row of each group after scrolling | Selection and pin toggle hit the row under the pointer, not a header |
+| 22h | Scroll a long list to the end and back | Rows and the pinned card stop at the list edges; nothing paints over the search field or the footer |
 | 23 | Multi-monitor / full-screen app | Popup appears on the status item's screen and above full-screen spaces |
 | 24 | Quit and relaunch | History and preferences persist; thumbnails regenerate if the temp cache was purged |
 | 25 | Images tab, one or more images, click **PDF…** | Export window lists every image selected; status reads `N of N images selected` |

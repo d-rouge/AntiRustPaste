@@ -1,6 +1,6 @@
 # Testing
 
-> Last reviewed: 2026-11-25 · Version 0.2.0
+> Last reviewed: 2026-11-25 · Version 0.2.1
 
 AntiRustPaste is a macOS GUI app, but most of its logic is testable without a screen.
 The goal is deterministic local checks, with a small, explicit manual matrix for

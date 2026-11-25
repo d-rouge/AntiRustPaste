@@ -1,6 +1,6 @@
 # Development
 
-> Last reviewed: 2026-11-25 · Version 0.2.0
+> Last reviewed: 2026-11-25 · Version 0.2.1
 
 ## Prerequisites
 
@@ -95,6 +95,9 @@ label and the Accessibility grant survive the rename. Everything else uses the
 product name: crates, the binary, the environment variables and the history
 directory (`~/Library/Application Support/AntiRustPaste`, migrated once from the
 old `RustClip` directory at launch).
+
+`./scripts/make-dmg.sh dist/AntiRustPaste.app 0.2.1` builds the styled installer
+window from the bundle (Finder automation is required for the icon layout).
 
 `./make-app.sh`:
 

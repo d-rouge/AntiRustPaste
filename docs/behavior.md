@@ -1,6 +1,6 @@
 # Behaviour specification
 
-> Last reviewed: 2026-11-25 · Version 0.2.0
+> Last reviewed: 2026-11-25 · Version 0.2.1
 
 This is the contract the app implements and the clean-room specification agents
 may use. Code, labels and assets are AntiRustPaste's own; no CopyClip source or

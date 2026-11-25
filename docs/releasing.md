@@ -25,7 +25,10 @@ signing keys or repository secrets are required: the workflow uses the built-in
      with `ANTIRUSTPASTE_UNIVERSAL=1 ./make-app.sh`, verifies the bundle version and
      that the binary contains both `arm64` and `x86_64`, then packages
      `AntiRustPaste-<version>-universal.zip`, `AntiRustPaste-<version>-universal.dmg` and
-     `SHA256SUMS.txt`.
+     `SHA256SUMS.txt`. The disk image is built by `scripts/make-dmg.sh`, which
+     lays the app and the Applications shortcut over `assets/dmg/background.png`
+     and lets Finder save the window layout; the runner needs a Finder session
+     for that step.
    - **Publish GitHub release** — creates the release for the tag with the
      generated notes and uploads the three files. If the release already exists,
      it replaces the assets instead.

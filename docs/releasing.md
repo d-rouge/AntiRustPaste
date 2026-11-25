@@ -33,6 +33,13 @@ signing keys or repository secrets are required: the workflow uses the built-in
      generated notes and uploads the three files. If the release already exists,
      it replaces the assets instead.
 
+The in-app updater consumes these assets: it downloads
+`AntiRustPaste-<version>-universal.zip`, checks it against `SHA256SUMS.txt`, and
+requires the unpacked bundle to declare `CFBundleIdentifier
+com.rustclip.app` and the release's `CFBundleShortVersionString`. Keep the zip
+name, the checksum entry and the bundle version in sync with the tag, or the
+update will be refused.
+
 ## Re-running a release
 
 - From the Actions tab, run **Release** with `workflow_dispatch` and the

@@ -1,12 +1,18 @@
 # Architecture
 
-> Last reviewed: 2026-11-25 · Version 0.3.0
+> Last reviewed: 2026-11-25 · Version 0.3.1
 
 AntiRustPaste is a single-process macOS accessory app. AppKit runs the main loop and
 a repeating `NSTimer` polls the pasteboard. There is no webview, database engine
 or async runtime. One background worker exists for thumbnails: it reads blobs,
 decodes them with `antirustpaste-imaging` and writes cache files; it never touches
 AppKit or `AppState`.
+
+The only network access is the update check: `NSURLSession` data tasks for the
+GitHub Releases API, `SHA256SUMS.txt` and the universal zip. They use a session
+whose delegate queue is the main queue, so every callback stays on the AppKit
+thread and runs through a panic guard. The app never checks for updates in a
+`target/` build or in tests; `ANTIRUSTPASTE_DISABLE_UPDATE_CHECK=1` turns it off.
 
 The repository is a Cargo workspace:
 
@@ -33,6 +39,7 @@ never depends on a shell. See [platforms.md](platforms.md).
 | `apps/antirustpaste-macos/src/hotkey.rs` | Carbon `RegisterEventHotKey` wrapper and shortcut formatting |
 | `apps/antirustpaste-macos/src/settings.rs` | `NSUserDefaults` keys, modifier migration, LaunchAgent management |
 | `apps/antirustpaste-macos/src/thumbnails.rs` | Boot-cleared cache path, private directory policy, `NSImage` loading |
+| `apps/antirustpaste-macos/src/update.rs` | Release JSON/version/checksum parsing, bundle detection and the detached install script (no AppKit) |
 | `crates/antirustpaste-core/src/store.rs` | `Clip`/`Captured`, JSON index, blob files, dedup, trim, command upsert, clear, previews, relative time |
 | `crates/antirustpaste-core/src/settings.rs` | Platform-neutral `Settings`, `IgnoredApp`, `Modifiers` bits |
 | `crates/antirustpaste-core/src/filter.rs` | `Section` (Text/Images/Commands) and search filtering |

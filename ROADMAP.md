@@ -1,12 +1,12 @@
 # Roadmap
 
-> Last reviewed: 2026-11-25 · Current release: 0.3.0
+> Last reviewed: 2026-11-25 · Current release: 0.3.1
 
 This file records planned features. The implemented behaviour is in
 [docs/behavior.md](docs/behavior.md); platform status is in
 [docs/platforms.md](docs/platforms.md).
 
-## Implemented: terminal command history (0.3.0)
+## Implemented: terminal command history (0.3.1)
 
 - A **Commands** tab reads `~/.zsh_history` (extended or plain) and
   `~/.bash_history` only when the tab is opened or **Refresh** (`⌘R`) is pressed.

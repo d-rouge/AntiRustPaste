@@ -32,7 +32,8 @@ are called through small FFI shims.
   close. Choosing a clipping writes it to the pasteboard, reactivates the
   previous app and synthesises ⌘V.
 - Status menu with Preferences, Export Images to PDF…, Clear All Clippings
-  (clippings and thumbnails; terminal commands are kept), About and Quit.
+  (clippings and thumbnails; terminal commands are kept), About, Check for
+  Updates… and Quit.
 - Footer buttons that clear only the **Text** section or only the **Images**
   section, with the same delete confirmation. **Clear All Clippings** keeps the
   commands, because they come from your own shell history; delete a command row
@@ -47,6 +48,11 @@ are called through small FFI shims.
 - History limit from 1 to 9999 items per section (200 by default); clippings and
   commands keep independent budgets.
 - Start at login through a per-user LaunchAgent.
+- **Update check**: at launch, and from **Check for Updates…** in the About
+  dialog, the app asks the GitHub Releases API for a newer version. It verifies
+  the release's `SHA256SUMS.txt`, replaces the running app bundle and restarts.
+  Automatic checks run only in the packaged app; a development build or a
+  Gatekeeper-translocated copy falls back to the release page.
 
 ## Download
 
@@ -124,6 +130,7 @@ Never point a development run at your real data. The overrides are:
 | `ANTIRUSTPASTE_LAUNCH_AGENT_DIR` | Directory for the login-item plist |
 | `ANTIRUSTPASTE_THUMB_CACHE_DIR` | Absolute, dedicated thumbnail cache directory |
 | `ANTIRUSTPASTE_SHELL_HISTORY_DIR` | Directory holding synthetic `.zsh_history`/`.bash_history` |
+| `ANTIRUSTPASTE_DISABLE_UPDATE_CHECK` | Set to `1` to skip the GitHub release check |
 
 Root/temp-root/home and relative cache paths are ignored; the default `/tmp`
 location is used instead. When `ANTIRUSTPASTE_DATA_DIR` is set without
@@ -221,6 +228,9 @@ crates/antirustpaste-imaging/    pure-Rust image metadata and thumbnails
 - History is plain JSON plus blob files; it is not encrypted.
 - Start at login uses a LaunchAgent, not `SMAppService`; moving the app requires
   relaunching it so the plist is rewritten.
+- Self-updates replace the app bundle in place. Because the bundle is ad-hoc
+  signed, macOS may ask for Accessibility approval again after an update; a
+  Gatekeeper-translocated copy can only open the release page.
 - A global shortcut already owned by another app must be re-recorded.
 
 ## Notes

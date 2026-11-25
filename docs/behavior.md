@@ -1,6 +1,6 @@
 # Behaviour specification
 
-> Last reviewed: 2026-11-25 · Version 0.3.0
+> Last reviewed: 2026-11-25 · Version 0.3.1
 
 This is the contract the app implements and the clean-room specification agents
 may use. Code, labels and assets are AntiRustPaste's own; no CopyClip source or
@@ -182,8 +182,19 @@ key.
 - **Clear All Clippings** asks for confirmation when enabled, then clears the
   clippings, every text/image blob and the thumbnail cache (including pending
   jobs). Terminal commands are kept.
-- **About AntiRustPaste** shows version, shortcut and history path.
+- **About AntiRustPaste** shows version, shortcut and history path, with a
+  **Check for Updates…** button that queries the latest GitHub release.
+- **Check for Updates…** (directly under About) runs the same check and reports
+  the result or offers the new version.
 - **Quit AntiRustPaste** terminates the app.
+
+At launch a packaged app also checks the latest GitHub release. When a newer
+version exists, an alert offers **Update Now**; the app downloads the universal
+zip, verifies it against the release's `SHA256SUMS.txt`, unpacks it, and offers
+**Restart Now** to swap the bundle and relaunch. **Later** keeps the running
+version. The manual check opens the release page instead when the app is a
+development build, is Gatekeeper-translocated, or cannot write to the bundle's
+folder. Set `ANTIRUSTPASTE_DISABLE_UPDATE_CHECK=1` to skip the check.
 
 ## 8. Export images to PDF
 

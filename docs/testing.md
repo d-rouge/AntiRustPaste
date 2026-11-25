@@ -1,6 +1,6 @@
 # Testing
 
-> Last reviewed: 2026-11-25 · Version 0.3.0
+> Last reviewed: 2026-11-25 · Version 0.3.1
 
 AntiRustPaste is a macOS GUI app, but most of its logic is testable without a screen.
 The goal is deterministic local checks, with a small, explicit manual matrix for
@@ -33,6 +33,7 @@ Current unit tests cover:
 | `antirustpaste` (macOS) | `hotkey` | Shortcut formatting, Carbon modifier mapping |
 | `antirustpaste` (macOS) | `thumbnails` | Unsafe cache roots, filesystem-safe user key |
 | `antirustpaste` (macOS) | `app` | PDF destination is replaced atomically; a missing directory is reported without leaving a file; drag moves shift rows in both directions; order keeps drags and appends new images; list layout headers, card, hit-testing and visible range |
+| `antirustpaste` (macOS) | `update` | Version parsing and ordering, release JSON and asset selection, running/older/draft releases ignored, checksum lookup, bundle-root detection, translocation |
 
 Tests that touch the filesystem use `std::env::temp_dir()` plus a UUID and remove
 their directory. They never call AppKit or touch the pasteboard. The PDF tests
@@ -83,7 +84,7 @@ operator's `~/.zsh_history` or `~/.bash_history` into a fixture.
 | --- | --- | --- |
 | 1 | Left-click the menu-bar icon | Popup opens under the icon, search focused |
 | 2 | Press Escape | Popup closes |
-| 3 | Right-click the icon | Status menu with Preferences/Export Images to PDF…/Clear All Clippings/About/Quit |
+| 3 | Right-click the icon | Status menu with Preferences/Export Images to PDF…/Clear All Clippings/About/Check for Updates…/Quit |
 | 4 | Copy a synthetic text marker | A new row appears within ~1 s, with source app and "just now" |
 | 5 | Copy the same marker again | Row count unchanged, marker moves to the top |
 | 6 | Type part of the marker | List filters live; footer count updates |
@@ -133,6 +134,15 @@ operator's `~/.zsh_history` or `~/.bash_history` into a fixture.
 | 27 | Save PDF… into a scratch folder after reordering and open the file in Preview | One A4 page per image in the dragged order, centred with white margins, original resolution, right way up |
 | 28 | Cancel the save dialog, then close the export window | No file is written and the window closes; the app stays usable |
 | 29 | Remove a selected blob behind the app, then save | Alert reports the problem, no partial PDF, export window stays open |
+| 30 | Open About and click **Check for Updates…** | The alert closes; a second alert reports "up to date" or offers the newer release. The UI never freezes while the request runs |
+| 31 | Launch a packaged build from `dist/AntiRustPaste.app` with the current version | Startup check is silent when it is the latest release, or offers the newer version once |
+| 32 | Launch with `ANTIRUSTPASTE_DISABLE_UPDATE_CHECK=1` | No release request is made and no update alert appears |
+
+The automatic download and bundle swap can only be exercised against a published
+newer release; it replaces `dist/AntiRustPaste.app`, so do that only with the
+operator's agreement. The staged copy is verified against `SHA256SUMS.txt` and
+its `CFBundleIdentifier`/`CFBundleShortVersionString` before the install script
+runs.
 
 After a manual run: quit the app, remove the scratch directory, and confirm no
 `antirustpaste` process remains. Do not run `pkill -f antirustpaste`; stop the PID you

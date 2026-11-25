@@ -7,6 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::ptr::{NonNull, null_mut};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use block2::RcBlock;
@@ -992,6 +993,12 @@ fn build_status_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
     menu.addItem(&menu_item(
         "About AntiRustPaste",
         sel!(showAbout:),
+        &target,
+        mtm,
+    ));
+    menu.addItem(&menu_item(
+        "Check for Updates…",
+        sel!(checkForUpdates:),
         &target,
         mtm,
     ));
@@ -2646,6 +2653,10 @@ thread_local! {
     static UPDATE_BUSY: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Keeps staged-update directories distinct when two downloads finish in the
+/// same millisecond (and when tests run in parallel).
+static UPDATE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
 fn update_check_disabled() -> bool {
     std::env::var_os("ANTIRUSTPASTE_DISABLE_UPDATE_CHECK").is_some()
 }
@@ -2684,11 +2695,7 @@ fn update_session() -> Retained<NSURLSession> {
     })
 }
 
-fn fetch_update_bytes(
-    url: &str,
-    limit: usize,
-    done: impl Fn(Result<Vec<u8>, String>) + 'static,
-) {
+fn fetch_update_bytes(url: &str, limit: usize, done: impl Fn(Result<Vec<u8>, String>) + 'static) {
     let Some(ns_url) = NSURL::URLWithString(&NSString::from_str(url)) else {
         done(Err("The update address is not valid.".to_string()));
         return;
@@ -2771,9 +2778,8 @@ fn check_for_updates(manual: bool) {
         update::RELEASE_JSON_LIMIT,
         move |result| {
             UPDATE_BUSY.set(false);
-            let release = result.and_then(|bytes| {
-                update::latest_release(&bytes, env!("CARGO_PKG_VERSION"))
-            });
+            let release =
+                result.and_then(|bytes| update::latest_release(&bytes, env!("CARGO_PKG_VERSION")));
             match release {
                 Ok(Some(available)) => offer_update(available),
                 Ok(None) => {
@@ -2857,7 +2863,7 @@ fn download_update(available: update::AvailableUpdate) {
             String::from_utf8(bytes).map_err(|_| "The checksum file is not text.".to_string())
         });
         match sums {
-            Ok(sums) => fetch_update_zip(for_zip, Some(sums)),
+            Ok(sums) => fetch_update_zip(for_zip.clone(), Some(sums)),
             Err(err) => finish_update_error(&err),
         }
     });
@@ -2901,9 +2907,10 @@ fn stage_update(
     sums: Option<&str>,
 ) -> Result<PathBuf, String> {
     let work = std::env::temp_dir().join(format!(
-        "antirustpaste-update-{}-{}",
+        "antirustpaste-update-{}-{}-{}",
         std::process::id(),
-        now_ms()
+        now_ms(),
+        UPDATE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
     fs::create_dir_all(&work)
         .map_err(|err| format!("Could not create a temporary folder: {err}"))?;
@@ -2928,9 +2935,8 @@ fn stage_update_in(
         .map_err(|err| format!("Could not save the downloaded update: {err}"))?;
 
     if let Some(sums) = sums {
-        let expected = update::checksum_for(sums, zip_name).ok_or_else(|| {
-            format!("The checksum file has no entry for {zip_name}.")
-        })?;
+        let expected = update::checksum_for(sums, zip_name)
+            .ok_or_else(|| format!("The checksum file has no entry for {zip_name}."))?;
         let actual = sha256_of(&zip_path)?;
         if actual != expected {
             return Err("The downloaded update failed its checksum check.".to_string());
@@ -3087,7 +3093,6 @@ fn launch_installer(work: &Path, staged: &Path, target: &Path) -> Result<(), Str
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3190,5 +3195,86 @@ mod tests {
 
         assert!(write_pdf_file(&target, b"%PDF").is_err());
         assert!(!target.exists());
+    }
+
+    fn fake_app(dir: &Path, version: &str, identifier: &str) -> PathBuf {
+        let app = dir.join("AntiRustPaste.app");
+        fs::create_dir_all(app.join("Contents/MacOS")).expect("app directories");
+        fs::write(app.join("Contents/MacOS/AntiRustPaste"), b"fake").expect("executable");
+        let plist = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <plist version=\"1.0\"><dict>\
+             <key>CFBundleIdentifier</key><string>{identifier}</string>\
+             <key>CFBundleShortVersionString</key><string>{version}</string>\
+             </dict></plist>\n"
+        );
+        fs::write(app.join("Contents/Info.plist"), plist).expect("Info.plist");
+        app
+    }
+
+    fn zipped_app(dir: &Path, app: &Path) -> Vec<u8> {
+        let zip = dir.join("update.zip");
+        let status = Command::new("/usr/bin/ditto")
+            .args(["-c", "-k", "--keepParent"])
+            .arg(app)
+            .arg(&zip)
+            .status()
+            .expect("run ditto");
+        assert!(status.success());
+        fs::read(&zip).expect("zip bytes")
+    }
+
+    #[test]
+    fn staged_update_is_verified_and_unpacked() {
+        let dir = scratch("update-stage");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("scratch directory");
+        let app = fake_app(&dir, "0.9.0", update::EXPECTED_BUNDLE_IDENTIFIER);
+        let bytes = zipped_app(&dir, &app);
+
+        let zip_path = dir.join("update.zip");
+        let hash = sha256_of(&zip_path).expect("sha256");
+        let sums = format!("{hash}  ./AntiRustPaste-0.9.0-universal.zip\n");
+        let version = update::Version::parse("0.9.0").expect("version");
+
+        let work = stage_update(
+            &bytes,
+            "AntiRustPaste-0.9.0-universal.zip",
+            version,
+            Some(&sums),
+        )
+        .expect("stage update");
+        assert!(
+            work.join("extract/AntiRustPaste.app/Contents/MacOS/AntiRustPaste")
+                .is_file()
+        );
+
+        let _ = fs::remove_dir_all(&work);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn staged_update_rejects_a_bad_checksum_or_version() {
+        let dir = scratch("update-reject");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("scratch directory");
+        let app = fake_app(&dir, "0.8.0", update::EXPECTED_BUNDLE_IDENTIFIER);
+        let bytes = zipped_app(&dir, &app);
+        let version = update::Version::parse("0.9.0").expect("version");
+        let zeros = "0".repeat(64);
+        let sums = format!("{zeros}  ./AntiRustPaste-0.9.0-universal.zip\n");
+
+        assert!(
+            stage_update(
+                &bytes,
+                "AntiRustPaste-0.9.0-universal.zip",
+                version,
+                Some(&sums)
+            )
+            .is_err()
+        );
+        assert!(stage_update(&bytes, "AntiRustPaste-0.9.0-universal.zip", version, None).is_err());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

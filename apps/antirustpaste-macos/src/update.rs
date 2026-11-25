@@ -22,7 +22,8 @@ pub(crate) const CHECKSUMS_LIMIT: usize = 64 * 1024;
 /// Upper bound for the universal app zip.
 pub(crate) const ZIP_LIMIT: usize = 64 * 1024 * 1024;
 
-const BUNDLE_IDENTIFIER: &str = "com.rustclip.app";
+/// The bundle identifier the staged app must declare before it is installed.
+pub(crate) const EXPECTED_BUNDLE_IDENTIFIER: &str = "com.rustclip.app";
 
 /// A `major.minor.patch` version with an optional pre-release suffix.
 ///
@@ -138,8 +139,8 @@ pub(crate) fn latest_release(
         .get("tag_name")
         .and_then(|value| value.as_str())
         .ok_or_else(|| "the release has no tag".to_string())?;
-    let version = Version::parse(tag)
-        .ok_or_else(|| format!("the release tag \"{tag}\" is not a version"))?;
+    let version =
+        Version::parse(tag).ok_or_else(|| format!("the release tag \"{tag}\" is not a version"))?;
     if version <= current {
         return Ok(None);
     }
@@ -154,7 +155,10 @@ pub(crate) fn latest_release(
         let Some(name) = asset.get("name").and_then(|value| value.as_str()) else {
             continue;
         };
-        let Some(url) = asset.get("browser_download_url").and_then(|value| value.as_str()) else {
+        let Some(url) = asset
+            .get("browser_download_url")
+            .and_then(|value| value.as_str())
+        else {
             continue;
         };
         if !url.starts_with("https://") {
@@ -206,6 +210,10 @@ pub(crate) fn checksum_for(sums: &str, file: &str) -> Option<String> {
             continue;
         };
         let name = name.trim_start_matches('*');
+        let name = Path::new(name)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(name);
         if name == file && is_sha256(hash) {
             return Some(hash.to_ascii_lowercase());
         }
@@ -237,9 +245,7 @@ pub(crate) fn bundle_root(exe: &Path) -> Option<PathBuf> {
 /// Gatekeeper's app translocation runs a downloaded bundle from a read-only
 /// random path; it cannot update itself in place.
 pub(crate) fn is_translocated(bundle: &Path) -> bool {
-    bundle
-        .to_string_lossy()
-        .contains("/AppTranslocation/")
+    bundle.to_string_lossy().contains("/AppTranslocation/")
 }
 
 /// `PID`, target bundle, staged bundle and work directory are passed as `$1`
@@ -255,32 +261,29 @@ work=$4
 backup="${target}.antirustpaste-old"
 
 while kill -0 "$pid" 2>/dev/null; do
-  sleep 0.2
+  /bin/sleep 0.2
 done
 
-rm -rf "$backup"
+/bin/rm -rf "$backup"
 if [ -e "$target" ]; then
-  mv "$target" "$backup"
+  /bin/mv "$target" "$backup"
 fi
 
 if /usr/bin/ditto "$staged" "$target"; then
   /usr/bin/xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
-  rm -rf "$backup"
-  rm -rf "$work"
+  /bin/rm -rf "$backup"
+  /bin/rm -rf "$work"
   /usr/bin/open "$target"
 else
-  rm -rf "$target"
+  /bin/rm -rf "$target"
   if [ -e "$backup" ]; then
-    mv "$backup" "$target"
+    /bin/mv "$backup" "$target"
     /usr/bin/open "$target"
   fi
-  rm -rf "$work"
+  /bin/rm -rf "$work"
   exit 1
 fi
 "#;
-
-/// The bundle identifier the staged app must declare before it is installed.
-pub(crate) const EXPECTED_BUNDLE_IDENTIFIER: &str = BUNDLE_IDENTIFIER;
 
 #[cfg(test)]
 mod tests {
@@ -290,18 +293,24 @@ mod tests {
     fn parses_plain_and_prefixed_versions() {
         let version = Version::parse("v1.2.3").expect("version");
         assert_eq!(version.to_string(), "1.2.3");
-        assert_eq!(Version::parse("1.2"), Some(Version {
-            major: 1,
-            minor: 2,
-            patch: 0,
-            prerelease: false,
-        }));
-        assert_eq!(Version::parse("2"), Some(Version {
-            major: 2,
-            minor: 0,
-            patch: 0,
-            prerelease: false,
-        }));
+        assert_eq!(
+            Version::parse("1.2"),
+            Some(Version {
+                major: 1,
+                minor: 2,
+                patch: 0,
+                prerelease: false,
+            })
+        );
+        assert_eq!(
+            Version::parse("2"),
+            Some(Version {
+                major: 2,
+                minor: 0,
+                patch: 0,
+                prerelease: false,
+            })
+        );
     }
 
     #[test]
@@ -319,9 +328,9 @@ mod tests {
         let old = Version::parse("0.2.1").expect("old");
         let new = Version::parse("0.3.0").expect("new");
         assert!(new > old);
-        assert!(Version::parse("0.2.2") > old);
+        assert!(Version::parse("0.2.2").expect("patch") > old);
         assert!(old > Version::parse("0.2.0").expect("older"));
-        assert!(Version::parse("0.3.0-beta") < new);
+        assert!(Version::parse("0.3.0-beta").expect("prerelease") < new);
         assert_eq!(Version::parse("0.2.1"), Some(old));
     }
 
@@ -361,12 +370,29 @@ mod tests {
 
     #[test]
     fn ignores_the_running_or_an_older_release() {
-        assert!(latest_release(&release_json("v0.2.1"), "0.2.1")
-            .expect("release")
-            .is_none());
-        assert!(latest_release(&release_json("v0.2.0"), "0.2.1")
-            .expect("release")
-            .is_none());
+        assert!(
+            latest_release(&release_json("v0.2.1"), "0.2.1")
+                .expect("release")
+                .is_none()
+        );
+        assert!(
+            latest_release(&release_json("v0.2.0"), "0.2.1")
+                .expect("release")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn ignores_draft_and_prerelease_payloads() {
+        let draft = br#"{"tag_name": "v9.0.0", "draft": true, "prerelease": false, "assets": []}"#;
+        let prerelease =
+            br#"{"tag_name": "v9.0.0", "draft": false, "prerelease": true, "assets": []}"#;
+        assert!(latest_release(draft, "1.0.0").expect("draft").is_none());
+        assert!(
+            latest_release(prerelease, "1.0.0")
+                .expect("prerelease")
+                .is_none()
+        );
     }
 
     #[test]
@@ -389,7 +415,7 @@ mod tests {
 
     #[test]
     fn reads_checksums_in_both_formats() {
-        let sums = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  AntiRustPaste-0.3.0-universal.zip\r\n\
+        let sums = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  ./AntiRustPaste-0.3.0-universal.zip\r\n\
                     bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *other.zip\n";
         assert_eq!(
             checksum_for(sums, "AntiRustPaste-0.3.0-universal.zip").as_deref(),
@@ -400,13 +426,39 @@ mod tests {
             Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
         );
         assert_eq!(checksum_for(sums, "missing.zip"), None);
-        assert_eq!(checksum_for("not-a-hash  AntiRustPaste.zip", "AntiRustPaste.zip"), None);
+        assert_eq!(
+            checksum_for("not-a-hash  AntiRustPaste.zip", "AntiRustPaste.zip"),
+            None
+        );
+    }
+
+    #[test]
+    fn install_script_is_valid_shell() {
+        let dir = std::env::temp_dir().join(format!(
+            "antirustpaste-install-script-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch directory");
+        let script = dir.join("install.sh");
+        std::fs::write(&script, INSTALL_SCRIPT).expect("write script");
+
+        let status = std::process::Command::new("/bin/sh")
+            .arg("-n")
+            .arg(&script)
+            .status()
+            .expect("run sh -n");
+        assert!(status.success());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn derives_the_bundle_root_from_the_executable() {
         assert_eq!(
-            bundle_root(Path::new("/Applications/AntiRustPaste.app/Contents/MacOS/AntiRustPaste")),
+            bundle_root(Path::new(
+                "/Applications/AntiRustPaste.app/Contents/MacOS/AntiRustPaste"
+            )),
             Some(PathBuf::from("/Applications/AntiRustPaste.app"))
         );
         assert_eq!(
@@ -414,7 +466,9 @@ mod tests {
             None
         );
         assert_eq!(
-            bundle_root(Path::new("/Applications/AntiRustPaste.app/Contents/AntiRustPaste")),
+            bundle_root(Path::new(
+                "/Applications/AntiRustPaste.app/Contents/AntiRustPaste"
+            )),
             None
         );
         assert!(!is_translocated(Path::new(

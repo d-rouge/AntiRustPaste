@@ -1,6 +1,6 @@
 # Development
 
-> Last reviewed: 2026-11-25 · Version 0.3.0
+> Last reviewed: 2026-11-25 · Version 0.3.1
 
 ## Prerequisites
 
@@ -69,6 +69,7 @@ directory on success.
 | `ANTIRUSTPASTE_LAUNCH_AGENT_DIR` | Login-item plist directory | `~/Library/LaunchAgents` |
 | `ANTIRUSTPASTE_THUMB_CACHE_DIR` | Absolute, dedicated thumbnail cache | `/tmp/AntiRustPaste-<user>-<hash>/thumbnails` (boot-cleared on macOS) |
 | `ANTIRUSTPASTE_SHELL_HISTORY_DIR` | Directory with `.zsh_history`/`.bash_history` | `$HOME` |
+| `ANTIRUSTPASTE_DISABLE_UPDATE_CHECK=1` | Skip the GitHub release check | off |
 | `ANTIRUSTPASTE_OPEN_PREFS=1` | Open Preferences at launch | off |
 | `ANTIRUSTPASTE_OPEN_PANEL=1` | Open the popup at launch | off |
 | `ANTIRUSTPASTE_OPEN_IMAGES=1` | Start the popup on Images | off |
@@ -106,7 +107,7 @@ product name: crates, the binary, the environment variables and the history
 directory (`~/Library/Application Support/AntiRustPaste`, migrated once from the
 old `RustClip` directory at launch).
 
-`./scripts/make-dmg.sh dist/AntiRustPaste.app 0.3.0` builds the styled installer
+`./scripts/make-dmg.sh dist/AntiRustPaste.app 0.3.1` builds the styled installer
 window from the bundle (Finder automation is required for the icon layout).
 
 `./make-app.sh`:

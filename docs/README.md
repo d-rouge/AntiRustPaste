@@ -22,7 +22,7 @@ agent rules are in [`../AGENTS.md`](../AGENTS.md). Tool-specific entry points
 The user-facing overview, requirements and keyboard map live in
 [`../README.md`](../README.md).
 
-## Current status (0.3.0)
+## Current status (0.3.1)
 
 Structure: workspace with `apps/antirustpaste-macos`, `crates/antirustpaste-core`,
 `crates/antirustpaste-imaging` and `crates/antirustpaste-pdf`. Only macOS is implemented; see
@@ -31,7 +31,8 @@ Structure: workspace with `apps/antirustpaste-macos`, `crates/antirustpaste-core
 Working: menu-bar app, text/RTF/HTML/image/file capture, Text/Images/Commands
 tabs, on-demand zsh/bash history, pure-Rust thumbnails, dedup, search, keyboard
 navigation, ⌘1…⌘9 quick paste, paste, status menu, preferences, ignored apps,
-history limit, login item, global shortcut.
+history limit, login item, global shortcut, launch/About release check with
+in-place update and restart.
 
 Known gaps: no per-row accessibility elements in the hand-drawn list, no image
 grid, EXIF orientation is not applied, no encryption, no schema migration yet

@@ -605,7 +605,7 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
 
     let footer = NSTextField::labelWithString(&NSString::from_str("0 clippings"), mtm);
     footer.setFrame(NSRect::new(
-        NSPoint::new(14.0, 8.0),
+        NSPoint::new(14.0, 9.0),
         NSSize::new(210.0, 16.0),
     ));
     footer.setFont(Some(&NSFont::systemFontOfSize(10.0)));
@@ -621,8 +621,8 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
         )
     };
     clear_text_button.setFrame(NSRect::new(
-        NSPoint::new(232.0, 2.0),
-        NSSize::new(96.0, 24.0),
+        NSPoint::new(232.0, 6.0),
+        NSSize::new(96.0, 22.0),
     ));
     clear_text_button.setBezelStyle(NSBezelStyle::Automatic);
     clear_text_button.setControlSize(NSControlSize::Small);
@@ -641,8 +641,8 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
         )
     };
     clear_images_button.setFrame(NSRect::new(
-        NSPoint::new(334.0, 2.0),
-        NSSize::new(112.0, 24.0),
+        NSPoint::new(334.0, 6.0),
+        NSSize::new(112.0, 22.0),
     ));
     clear_images_button.setBezelStyle(NSBezelStyle::Automatic);
     clear_images_button.setControlSize(NSControlSize::Small);

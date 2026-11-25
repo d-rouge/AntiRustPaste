@@ -22,9 +22,10 @@ Current unit tests cover:
 
 | Crate | Area | Behaviour |
 | --- | --- | --- |
-| `antirustpaste-core` | `store` | Preview, dedup, pinned ordering/trim exemption, trim/clear blobs, corrupt index, missing blobs, legacy records, blob traversal |
+| `antirustpaste-core` | `store` | Preview, dedup, pinned ordering/trim exemption, trim/clear blobs, corrupt index, missing blobs, legacy records, blob traversal, command upsert and independent budgets |
 | `antirustpaste-core` | `settings` | Ignored-app dedup/sort, platform-neutral modifier bits |
-| `antirustpaste-core` | `filter` | Text/Images sections, query across preview/text/source |
+| `antirustpaste-core` | `filter` | Text/Images/Commands sections, query across preview/text/source |
+| `antirustpaste-core` | `shell_history` | zsh/bash parsing, timestamps, tail/delta reads, truncation/rewrite fallback, partial lines, oversized/invalid input, cursor persistence |
 | `antirustpaste-core` | `thumbnails` | Cache naming, prune, blob→thumbnail generation, background worker result, clear |
 | `antirustpaste-imaging` | codec | PNG/TIFF/JPEG metadata, aspect-preserving thumbnails, no upscaling, hostile inputs, dimension caps, RGB decode with alpha composited onto white |
 | `antirustpaste-pdf` | export | Empty selection, invalid image, one page per image, upright image transform, cross-reference offsets point at every object |
@@ -46,13 +47,16 @@ to confirm page size, margins, colour and upright orientation.
 ANTIRUSTPASTE_SMOKE_PREFS=1 ./scripts/smoke.sh   # also opens Preferences
 ANTIRUSTPASTE_SMOKE_PANEL=1 ./scripts/smoke.sh   # also opens the history popup
 ANTIRUSTPASTE_SMOKE_IMAGES=1 ./scripts/smoke.sh  # opens the popup on Images
+ANTIRUSTPASTE_SMOKE_COMMANDS=1 ./scripts/smoke.sh # opens Commands with synthetic history
 ```
 
-The script sets all four isolation variables (history, defaults, login item and
-thumbnail cache), starts the app for three seconds, fails if the process exits
-or logs `panicked at`, and kills only the process it started. It does not touch
-the clipboard, screen, TCC or LaunchAgents. Thumbnail generation is asynchronous,
-so the smoke check only proves the UI and worker start cleanly.
+The script sets all isolation variables (history, defaults, login item,
+thumbnail cache and shell history), starts the app for three seconds, fails if
+the process exits or logs `panicked at`, and kills only the process it started.
+The Commands smoke variant writes synthetic `echo antirustpaste-smoke-*` entries
+to a scratch directory; the operator's real history is never read. Thumbnail
+generation is asynchronous, so the smoke check only proves the UI and worker
+start cleanly.
 
 ## Manual GUI matrix
 
@@ -61,12 +65,19 @@ screen or grants Accessibility. Use a scratch history:
 
 ```sh
 SCRATCH="$(mktemp -d)"
+mkdir -p "$SCRATCH/shell"
+printf ': 1700000000:0;echo antirustpaste-smoke-1\n' >"$SCRATCH/shell/.zsh_history"
+printf 'echo antirustpaste-smoke-2\n' >"$SCRATCH/shell/.bash_history"
 ANTIRUSTPASTE_DATA_DIR="$SCRATCH/data" \
 ANTIRUSTPASTE_DEFAULTS_SUITE="com.antirustpaste.test.$$" \
 ANTIRUSTPASTE_LAUNCH_AGENT_DIR="$SCRATCH/LaunchAgents" \
 ANTIRUSTPASTE_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
+ANTIRUSTPASTE_SHELL_HISTORY_DIR="$SCRATCH/shell" \
 ./target/debug/antirustpaste
 ```
+
+Use only synthetic command markers in the scratch history; never copy the
+operator's `~/.zsh_history` or `~/.bash_history` into a fixture.
 
 | # | Check | Expected |
 | --- | --- | --- |
@@ -79,7 +90,7 @@ ANTIRUSTPASTE_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
 | 7 | Arrow keys + Return | Selected row is written to the clipboard and ⌘V is sent to the previous app |
 | 8 | ⌘C on a row | Clipboard changes, popup closes, no synthetic paste |
 | 9 | Delete with empty search | Confirmation (if enabled), then row and blob disappear |
-| 10 | Clear All Clippings | Confirmation, text and images removed, all blobs and thumbnails removed |
+| 10 | Clear All Clippings | Confirmation, clippings and thumbnails removed; terminal commands remain |
 | 11 | Add an ignored app | New clips from it are not captured; existing ones remain |
 | 12 | Change the limit below the current count | Confirmation, oldest rows trimmed |
 | 13 | Record a new shortcut | Old one stops working, new one opens the popup |
@@ -88,7 +99,16 @@ ANTIRUSTPASTE_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
 | 16 | Start at login toggle with scratch `ANTIRUSTPASTE_LAUNCH_AGENT_DIR` | Plist created/removed only in the scratch directory |
 | 17 | Copy a PNG/JPEG and a file in Finder | Image appears in Images, the file URL in Text; both paste back |
 | 18 | Copy from a password manager | Concealed item is not captured |
-| 19 | Switch to Images with the segmented control and ⌘1/⌘2 | Tab changes, search placeholder and footer update, selection resets |
+| 19 | Switch to Images with the segmented control and ⌘⇧2/⌘⇧1 | Tab changes, search placeholder and footer update, selection resets; tooltips name each icon |
+| 19a | Start with synthetic `.zsh_history`/`.bash_history`, open Commands | `zsh`/`bash` rows appear; no `shell-history.json` exists before the tab is opened |
+| 19b | Press ⌘1…⌘9 in each tab | The Nth visible row (after search and pinned grouping) is pasted; with fewer rows the extra digits do nothing |
+| 19c | Press ⌘⇧1 / ⌘⇧2 / ⌘⇧3 | Text / Images / Commands become active without pasting a row |
+| 19d | Append a synthetic line to the scratch `.zsh_history`, press **Refresh** and ⌘R | Only the new command appears; existing rows do not duplicate |
+| 19e | Truncate or rewrite the scratch history, press Refresh | The tail is re-read without duplicating or mass-reordering stored commands |
+| 19f | Pin a command and search for it | It moves to **PINNED**, filters like a clipping, and survives repeated refreshes |
+| 19g | Delete a command row with ⌫, then Refresh | The command stays deleted; it is not re-added by a normal append |
+| 19h | **Clear All Clippings** with commands present | Clippings and thumbnails are removed; command rows remain |
+| 19i | Commands tab, press ⌘E or Space | No PDF/preview action: those belong to Images |
 | 20 | Open Images with an image in history | `IMG` placeholder may appear first; thumbnail replaces it within ~0.1–1 s; cache file exists under `ANTIRUSTPASTE_THUMB_CACHE_DIR` |
 | 21 | Clear Thumbnail Cache in Preferences | Thumbnails disappear and regenerate in the background on the next draw; history remains |
 | 22 | Delete/clear/trim image clips | Their thumbnail files are pruned; no orphan files remain |
@@ -127,6 +147,12 @@ crash fix.
 | --- | --- |
 | `history.json` is empty, truncated or not JSON | Renamed to `history.json.bak`, app starts empty, no crash |
 | Index larger than 64 MiB | Moved aside, app starts empty |
+| `shell-history.json` is empty, truncated or not JSON | Ignored; the next Commands refresh reads the tail |
+| Shell history cursor points past the end or at different bytes | Treated as truncation/rewrite; tail read, no crash |
+| Shell history line is longer than 16 KiB or contains NUL | Skipped; later lines are still read |
+| Shell history contains invalid UTF-8 | Line skipped; no panic |
+| Shell history ends with a line without `\n` | Line waits for the next refresh |
+| Shell history is one enormous line above the tail window | Skipped; the cursor moves past it |
 | Image data is truncated, corrupt or not an image | Imaging crate returns an error; Images row shows `IMG`; clip stays pasteable |
 | Image dimensions exceed 32 MP | Rejected before decode; no large allocation |
 | Image has zero width or height | Rejected; no thumbnail |
@@ -163,6 +189,11 @@ crash fix.
   paths are ignored. Without the override macOS uses
   `/tmp/AntiRustPaste-<user>-<hash>/thumbnails`, which is boot-cleared but still
   readable by the current user during the session.
+- Point `ANTIRUSTPASTE_SHELL_HISTORY_DIR` at a scratch directory with synthetic
+  `.zsh_history`/`.bash_history` files. Never read the operator's real shell
+  history in a test, and never copy command text into a fixture, prompt or log.
+  When `ANTIRUSTPASTE_DATA_DIR` is set without this override, the app reads no
+  shell history at all.
 - Never grant or revoke Accessibility, or edit TCC.
 - Never use the operator's clipboard contents as a fixture. Use synthetic text.
   Replacing their clipboard is a side effect: ask first.

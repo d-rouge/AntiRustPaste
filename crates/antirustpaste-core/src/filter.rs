@@ -6,6 +6,7 @@ use crate::store::{Clip, ClipKind};
 pub enum Section {
     Text,
     Images,
+    Commands,
 }
 
 /// Indices of the clips visible in `section` for `query`, newest first.
@@ -16,7 +17,8 @@ pub fn filter_indices(clips: &[Clip], section: Section, query: &str) -> Vec<usiz
         .enumerate()
         .filter(|(_, clip)| match section {
             Section::Images => clip.kind == ClipKind::Image,
-            Section::Text => clip.kind != ClipKind::Image,
+            Section::Commands => clip.kind == ClipKind::Command,
+            Section::Text => clip.kind != ClipKind::Image && clip.kind != ClipKind::Command,
         })
         .filter(|(_, clip)| {
             if query.is_empty() || clip.preview.to_lowercase().contains(&query) {
@@ -71,6 +73,20 @@ mod tests {
 
         assert_eq!(filter_indices(&clips, Section::Text, ""), vec![0, 2]);
         assert_eq!(filter_indices(&clips, Section::Images, ""), vec![1]);
+        assert!(filter_indices(&clips, Section::Commands, "").is_empty());
+    }
+
+    #[test]
+    fn commands_have_their_own_section() {
+        let clips = vec![
+            clip(ClipKind::Command, "cargo test"),
+            clip(ClipKind::Text, "hello"),
+            clip(ClipKind::Command, "git status"),
+        ];
+
+        assert_eq!(filter_indices(&clips, Section::Text, ""), vec![1]);
+        assert_eq!(filter_indices(&clips, Section::Commands, ""), vec![0, 2]);
+        assert_eq!(filter_indices(&clips, Section::Commands, "git"), vec![2]);
     }
 
     #[test]

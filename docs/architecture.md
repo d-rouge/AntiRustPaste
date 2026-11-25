@@ -26,16 +26,17 @@ never depends on a shell. See [platforms.md](platforms.md).
 | Module | Responsibility |
 | --- | --- |
 | `apps/antirustpaste-macos/src/main.rs` | `--help`/`--version`; starts `app::run()` |
-| `apps/antirustpaste-macos/src/app.rs` | `NSApplicationDelegate`, thread-local `AppState`, status item and menu, clipboard polling, hot key, keyboard handling, all user actions, panic guards |
+| `apps/antirustpaste-macos/src/app.rs` | `NSApplicationDelegate`, thread-local `AppState`, status item and menu, clipboard polling, on-demand shell history, hot key, keyboard handling, all user actions, panic guards |
 | `apps/antirustpaste-macos/src/views.rs` | Objective-C classes: `RCClipPanel`, `RCClipListView`, `RCIgnoredAppsView`, `RCPanelDelegate`; construction of the popup and Preferences window |
 | `apps/antirustpaste-macos/src/pasteboard.rs` | Reads and writes `NSPasteboard` with type/size limits |
 | `apps/antirustpaste-macos/src/paste.rs` | CoreGraphics ⌘V synthesis and the Accessibility trust prompt |
 | `apps/antirustpaste-macos/src/hotkey.rs` | Carbon `RegisterEventHotKey` wrapper and shortcut formatting |
 | `apps/antirustpaste-macos/src/settings.rs` | `NSUserDefaults` keys, modifier migration, LaunchAgent management |
 | `apps/antirustpaste-macos/src/thumbnails.rs` | Boot-cleared cache path, private directory policy, `NSImage` loading |
-| `crates/antirustpaste-core/src/store.rs` | `Clip`/`Captured`, JSON index, blob files, dedup, trim, clear, previews, relative time |
+| `crates/antirustpaste-core/src/store.rs` | `Clip`/`Captured`, JSON index, blob files, dedup, trim, command upsert, clear, previews, relative time |
 | `crates/antirustpaste-core/src/settings.rs` | Platform-neutral `Settings`, `IgnoredApp`, `Modifiers` bits |
-| `crates/antirustpaste-core/src/filter.rs` | `Section` (Text/Images) and search filtering |
+| `crates/antirustpaste-core/src/filter.rs` | `Section` (Text/Images/Commands) and search filtering |
+| `crates/antirustpaste-core/src/shell_history.rs` | zsh/bash history parsing, bounded tail/delta reads, cursor sidecar |
 | `crates/antirustpaste-core/src/thumbnails.rs` | Thumbnail worker, file cache, prune/clear, generation epochs |
 | `crates/antirustpaste-imaging` | Pure-Rust image metadata, thumbnails and RGB decoding (`image` crate) |
 | `crates/antirustpaste-pdf` | PDF container, A4 page layout and Flate-compressed image embedding |
@@ -69,6 +70,10 @@ main
                 ├── register the Carbon hot key
                 └── optional automation hooks (ANTIRUSTPASTE_OPEN_*)
 ```
+
+No shell-history file is read at startup. The Commands tab reads on demand when
+it is selected (or when an automation hook opens it), so startup stays free of
+user history files.
 
 Autorelease pools and AppKit objects are created on the main thread. The only
 extra thread is the named `antirustpaste-thumbnails` worker started by
@@ -149,6 +154,38 @@ draw Images row
 Polling is intentionally simple. `changeCount` is the only change signal; there
 is no polling of item contents and no global event tap.
 
+## Shell history flow
+
+```
+Commands tab / Refresh button / ⌘R
+ └── app::refresh_shell_history
+      ├── load <data>/shell-history.json (offset + fingerprint per shell)
+      ├── for ~/.zsh_history and ~/.bash_history
+      │    ├── cursor valid? read only the appended delta (<= 256 KiB)
+      │    └── otherwise read the tail (<= 1 MiB) and keep the newest commands
+      ├── Store::upsert_command  (dedup by command text, refresh if newer)
+      ├── save history.json and, when it advanced, the cursor sidecar
+      └── refresh_ui
+```
+
+- `crates/antirustpaste-core/src/shell_history.rs` owns parsing and bounded
+  reads; `app.rs` owns the home paths and the on-demand trigger.
+  `ANTIRUSTPASTE_SHELL_HISTORY_DIR` redirects the paths in tests.
+- zsh extended entries (`: <epoch>:<elapsed>;<command>`) keep their timestamp;
+  bash `#<epoch>` comments do too. Untimestamped tail entries use the file
+  mtime, and appended lines use the read time.
+- A saved cursor is checked against a 64-byte fingerprint. A mismatch (truncate,
+  rotation, in-place rewrite) falls back to a tail read. Commands that are
+  already stored are only moved when the file carries a newer timestamp, so a
+  bulk re-read does not reorder the list.
+- Commands are `ClipKind::Command` records with no blob and the shell name in
+  `source_name`. `Store::trim_sections` and the insert path keep a separate
+  budget for `command` and non-`command` records.
+- Nothing runs on a timer. Shell history is read only when the tab is selected,
+  the Refresh button is pressed or `⌘R` is used; the files are never watched.
+- Bounds: 1 MiB tail, 256 KiB delta, 16 KiB per command, 64 KiB cursor file.
+  Invalid UTF-8, empty lines, NUL bytes and oversized lines are skipped.
+
 ## Paste flow
 
 ```
@@ -173,14 +210,18 @@ falls back to the last non-AntiRustPaste frontmost app by bundle id.
 `NSWindowStyleMask::NonactivatingPanel`, level `NSStatusWindowLevel`, join-all-spaces
 and full-screen-auxiliary behaviour. Its content is an `NSVisualEffectView`
 (popover material) with rounded corners. The history rows are drawn by
-`RCClipListView::drawRect:`; only the visible range is painted. A segmented
-control switches between **Text** and **Images**; ⌘1/⌘2 do the same. The search
-field is the first responder, and a local key monitor handles arrows, Enter,
-Escape, Delete, ⌘1/⌘2, ⌘C, ⌘P and ⌘E before AppKit's responder chain. The
-footer holds **Clear Text** and **Clear Images** buttons; each calls
-`Store::remove_where` for its section and then prunes thumbnails. On the Images
+`RCClipListView::drawRect:`; only the visible range is painted. An icon-only
+segmented control switches between **Text**, **Images** and **Commands**;
+⌘⇧1/⌘⇧2/⌘⇧3 do the same, while ⌘1…⌘9 paste the Nth visible row of the active
+tab. The search field is the first responder, and a local key monitor handles
+arrows, Enter, Escape, Delete, ⌘⇧1–3, ⌘1–9, ⌘C, ⌘P, ⌘E and ⌘R before AppKit's
+responder chain. The footer holds **Clear Text** and **Clear Images** buttons;
+each calls `Store::remove_where` for its section and then prunes thumbnails.
+There is no **Clear Commands** button: commands are deleted row by row and
+**Clear All Clippings** keeps them. On the Images
 tab it also holds **PDF…**, which opens the export window, and the footer hint
-switches to `⌘E PDF`. `⌘P` toggles the pin of the selected row; pinned rows draw
+switches to `⌘E PDF`. On the Commands tab it holds **Refresh**, and the hint
+switches to `⌘R refresh`. `⌘P` toggles the pin of the selected row; pinned rows draw
 a tilting accent SF Symbol pin inside a rounded card under a **PINNED** header.
 `ListLayout` (in `app.rs`) owns the row geometry: header heights, group
 offsets, the pinned card, hit-testing and the visible range. Drawing, click
@@ -195,8 +236,8 @@ inside the mouse event lets the status bar take key back and immediately fires
 
 Preferences are a regular `NSWindow` with an `NSTabView`:
 
-- **General** — max clippings, record toggle, confirm-before-delete, start at
-  login, shortcut recorder.
+- **General** — max items per section, record toggle, confirm-before-delete,
+  start at login, shortcut recorder.
 - **Exceptions** — ignored apps in an `NSScrollView` with a custom list view and
   Add/Remove buttons.
 
@@ -324,15 +365,19 @@ overrides it.
 On macOS the default is `~/Library/Application Support/AntiRustPaste/`.
 
 ```
-history.json     ordered array of Clip records, newest first
-blobs/<uuid>.bin image / RTF / HTML bytes
+history.json        ordered array of Clip records, newest first
+blobs/<uuid>.bin    image / RTF / HTML bytes
+shell-history.json  zsh/bash byte offset + fingerprint (no command text)
 ```
 
 `Clip` fields: `id`, `kind`, `preview`, `text`, `data_type`, `blob`, `byte_len`,
 `width`, `height`, `source_name`, `source_bundle`, `date_ms`, `hash`, `pinned`.
 Image dimensions and `pinned` are optional/defaulted for older histories. The
 vector is maintained pinned-first; `Store::trim` removes only unpinned clips and
-`Store::set_pinned` moves a clip into the matching group.
+`Store::set_pinned` moves a clip into the matching group. A shell command is a
+`Clip` with `kind: command`, the command in `text`, the shell in `source_name`
+and no blob; `Store::upsert_command` dedups by command text. Trimming keeps
+independent budgets for command and non-command records.
 
 Guarantees:
 
@@ -385,6 +430,9 @@ combination; the previous shortcut is restored.
 | Image decode failure | `IMG` placeholder in the Images tab; the clip is still pasteable |
 | Thumbnail worker cannot start | no thumbnails; the rest of the app works and failures stay non-fatal |
 | Thumbnail cache unwritable | `IMG` placeholder; history is unaffected |
+| Shell history file missing/unreadable | Commands tab stays empty; no alert |
+| Shell history file truncated or rewritten | re-read as a tail; stored entries keep their order |
+| Shell history cursor corrupt | ignored; the next read starts from the tail |
 | Panic in a callback | caught by `guard`, logged, app continues |
 | State not initialized | invariant panic in `with_state`, caught if it happens inside a guarded callback |
 
@@ -393,5 +441,7 @@ combination; the previous shortcut is restored.
 - Cloud sync or network access.
 - Multiple named clipboards.
 - Encryption at rest (the history is plain JSON; document this).
+- A background watcher for shell history files.
+- Reading a custom `$HISTFILE` or fish history.
 - A plugin or scripting surface.
 - Copying another app's assets, icons or wording.

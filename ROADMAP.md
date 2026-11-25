@@ -6,6 +6,28 @@ This file records planned features. The implemented behaviour is in
 [docs/behavior.md](docs/behavior.md); platform status is in
 [docs/platforms.md](docs/platforms.md).
 
+## Implemented: terminal command history
+
+- A **Commands** tab reads `~/.zsh_history` (extended or plain) and
+  `~/.bash_history` only when the tab is opened or **Refresh** (`⌘R`) is pressed.
+  There is no background watcher.
+- `crates/antirustpaste-core/src/shell_history.rs` owns parsing, bounded
+  tail/delta reads and the cursor sidecar; the macOS shell owns the paths and
+  `ANTIRUSTPASTE_SHELL_HISTORY_DIR`.
+- Commands are `ClipKind::Command` records in the same index, with the shell in
+  `source_name`, no blob and an independent trim budget. They support search,
+  pinning, delete and `⌘1…⌘9` paste.
+- There is no **Clear Commands** button; **Clear All Clippings** keeps commands.
+  Delete a command row to remove it.
+
+### Remaining
+
+- [ ] Live updates for zsh without `SHARE_HISTORY`/`INC_APPEND_HISTORY` (would
+      require changing the user's shell configuration or another data source).
+- [ ] A preference for a custom `$HISTFILE` path and additional shells (fish).
+- [ ] An explicit **Clear Commands** action, if the operator asks for one.
+- [ ] Show whether a command came from zsh or bash as a distinct glyph.
+
 ## Implemented: pinned clippings (0.1.0)
 
 Status: the core data model, ordering, trim exemption, `⌘P` toggle and row pin
@@ -22,16 +44,17 @@ removed only by an explicit delete or clear action.
 
 - Pin and unpin with the clickable pin icon at the right of each row or `⌘P`;
   show a clear pin indicator on pinned rows. A row context menu is a follow-up.
-- Pinned clips appear in a pinned group before unpinned clips in both the Text
-  and Images sections. Within each group, newest first.
+- Pinned clips appear in a pinned group before unpinned clips in the Text,
+  Images and Commands sections. Within each group, newest first.
 - `Store::trim` never removes a pinned clip. The configured maximum applies to
   unpinned clips; pinned clips may make the total exceed it intentionally.
 - Re-copying content that is already pinned moves it to the top of the pinned
   group and keeps `pinned = true`.
 - Deleting one row removes it even if pinned, after the normal confirmation.
-- **Clear Text**, **Clear Images** and **Clear All Clippings** remove pinned
-  clips in their scope after confirmation; pinning protects against automatic
-  eviction, not against an explicit clear.
+- **Clear Text** and **Clear Images** remove pinned clips in their section after
+  confirmation; pinned commands are kept by **Clear All Clippings** and are
+  deleted row by row. Pinning protects against automatic eviction, not against
+  an explicit clear.
 - Search and section filtering include pinned clips. The pin indicator remains
   visible when a pinned row is selected.
 - Pinned rows sit in a rounded card under a **PINNED** header, with a **RECENT**
@@ -61,8 +84,8 @@ removed only by an explicit delete or clear action.
 - [x] Re-copy a pinned clip: one row remains, still pinned and at the top.
 - [x] Existing history JSON without `pinned` loads unchanged.
 - [x] Pin/unpin persists across relaunch.
-- [x] Clear Text / Clear Images / Clear All remove pinned clips after
-      confirmation.
+- [x] Clear Text / Clear Images remove pinned clips after confirmation; Clear
+      All keeps pinned commands.
 - [ ] Row context menu for pin/paste/delete (follow-up).
 
 ### Open questions

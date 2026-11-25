@@ -257,8 +257,9 @@ the front of the vector, and make `trim` count/remove only unpinned clips. Use
 belongs in the platform-neutral store and every shell must apply the same rules.
 The field is additive with `#[serde(default)]`, so old histories need no
 migration. A pinned duplicate content hash keeps its pinned flag and moves to
-the top of the pinned group. Explicit delete/section clear/clear-all still
-removes pinned clips; pinning protects only against automatic eviction.
+the top of the pinned group. Explicit delete, section clear and Clear All
+Clippings still remove pinned clippings; pinning protects only against automatic
+eviction. Shell commands are kept by Clear All Clippings.
 
 **Trade-off.** The history can exceed the configured maximum when many clips are
 pinned. This is intentional and visible in the row count; the alternative
@@ -287,3 +288,29 @@ library call.
 **Validation.** `cargo test -p antirustpaste-pdf` checks the header, trailer,
 `startxref` offsets, one `/Type /Page` per image, `/FlateDecode` streams, and
 that the content matrix negates the height so rows are not upside down.
+
+## ADR-017: Shell history is read on demand, not watched
+
+**Decision.** Keep shell commands as `ClipKind::Command` records in the same
+`history.json`, but read `~/.zsh_history`/`~/.bash_history` only when the
+Commands tab is opened or refreshed. Persist a byte offset and a 64-byte
+fingerprint per shell in `<data>/shell-history.json`; a missing, corrupt or
+mismatched cursor falls back to a bounded tail read.
+
+**Why.** Reading another program's private history in the background would make
+every startup touch sensitive files the user did not ask for, and zsh by default
+writes the file only when the shell exits, so a watcher would not be timely
+anyway. Reusing `Clip`/`Store` gives search, pinning, delete and paste for free;
+the alternative (a second store) would duplicate every action path.
+
+**Alternatives.** A file watcher or polling timer (background privacy cost, no
+benefit without `SHARE_HISTORY`), an `$HISTFILE` hook in the user's shell
+configuration (modifying their dotfiles), a separate `commands.json` (more code
+and a second retention policy), storing commands as blobs (unnecessary disk I/O
+for text).
+
+**Trade-off.** New commands appear only after the shell writes the file and the
+tab is refreshed. Commands and clippings share one index, so an older build that
+does not know the `command` kind would quarantine the index as `.bak` instead of
+reading it; the current reader still accepts every older record. The configured
+limit applies per section, and `Clear All Clippings` leaves commands alone.

@@ -89,6 +89,8 @@ pub fn read_items(pb: &NSPasteboard) -> Vec<Captured> {
                             byte_len: path.len(),
                             width: None,
                             height: None,
+                            source_name: None,
+                            source_bundle: None,
                         });
                         break;
                     }
@@ -118,6 +120,8 @@ pub fn read_items(pb: &NSPasteboard) -> Vec<Captured> {
                             byte_len: bytes.len(),
                             width: info.map(|info| info.width),
                             height: info.map(|info| info.height),
+                            source_name: None,
+                            source_bundle: None,
                         });
                         break;
                     }
@@ -159,6 +163,8 @@ pub fn read_items(pb: &NSPasteboard) -> Vec<Captured> {
                             byte_len: len,
                             width: None,
                             height: None,
+                            source_name: None,
+                            source_bundle: None,
                         });
                         break;
                     }
@@ -178,6 +184,8 @@ pub fn read_items(pb: &NSPasteboard) -> Vec<Captured> {
                             data: None,
                             width: None,
                             height: None,
+                            source_name: None,
+                            source_bundle: None,
                         });
                         break;
                     }
@@ -200,7 +208,7 @@ pub fn read_items(pb: &NSPasteboard) -> Vec<Captured> {
 pub fn write_clip(pb: &NSPasteboard, store: &Store, clip: &Clip) -> bool {
     pb.clearContents();
     match clip.kind {
-        ClipKind::Text => {
+        ClipKind::Text | ClipKind::Command => {
             if let Some(text) = &clip.text {
                 return pb.setString_forType(&NSString::from_str(text), t_string());
             }

@@ -22,8 +22,9 @@ use crate::hotkey::{self, Hotkey};
 use crate::paste;
 use crate::pasteboard;
 use antirustpaste_core::{
-    ClipKind, IgnoredApp, MAX_LIMIT, Section, Settings, Store, ThumbnailService,
-    filter_indices as core_filter_indices,
+    Clip, ClipKind, IgnoredApp, MAX_LIMIT, Section, Settings, Shell, ShellFile, Store,
+    ThumbnailService, filter_indices as core_filter_indices, load_cursors, now_ms, read_new,
+    save_cursors,
 };
 use antirustpaste_pdf::PdfImage;
 
@@ -192,8 +193,10 @@ impl SectionUi for Section {
         match (self, count) {
             (Self::Text, 1) => "1 clipping".to_string(),
             (Self::Images, 1) => "1 image".to_string(),
+            (Self::Commands, 1) => "1 command".to_string(),
             (Self::Text, count) => format!("{count} clippings"),
             (Self::Images, count) => format!("{count} images"),
+            (Self::Commands, count) => format!("{count} commands"),
         }
     }
 
@@ -201,6 +204,7 @@ impl SectionUi for Section {
         match self {
             Self::Text => "Your clippings will appear here…",
             Self::Images => "Your images will appear here…",
+            Self::Commands => "Your terminal commands will appear here…",
         }
     }
 
@@ -208,6 +212,7 @@ impl SectionUi for Section {
         match self {
             Self::Text => "No clippings found",
             Self::Images => "No images found",
+            Self::Commands => "No commands found",
         }
     }
 
@@ -215,6 +220,7 @@ impl SectionUi for Section {
         match self {
             Self::Text => "Search clippings",
             Self::Images => "Search images",
+            Self::Commands => "Search commands",
         }
     }
 }
@@ -238,6 +244,7 @@ pub(crate) struct AppState {
     pub clear_text_button: Retained<NSButton>,
     pub clear_images_button: Retained<NSButton>,
     pub export_pdf_button: Retained<NSButton>,
+    pub refresh_commands_button: Retained<NSButton>,
     pub pin_outline: Option<Retained<NSImage>>,
     pub pin_filled: Option<Retained<NSImage>>,
     pub pin_outline_selected: Option<Retained<NSImage>>,
@@ -364,20 +371,36 @@ pub(crate) fn filtered_indices(s: &AppState) -> Vec<usize> {
     core_filter_indices(&s.store.clips, s.section, &s.query)
 }
 
+pub(crate) fn section_matches(section: ClipboardSection, clip: &Clip) -> bool {
+    match section {
+        ClipboardSection::Text => clip.kind != ClipKind::Image && clip.kind != ClipKind::Command,
+        ClipboardSection::Images => clip.kind == ClipKind::Image,
+        ClipboardSection::Commands => clip.kind == ClipKind::Command,
+    }
+}
+
 fn set_section(section: ClipboardSection) {
-    with_state(|s| {
+    let changed = with_state(|s| {
+        let changed = s.section != section;
         s.section = section;
         s.selected = 0;
         s.scroll = 0.0;
         s.section_control.setSelectedSegment(match section {
             ClipboardSection::Text => 0,
             ClipboardSection::Images => 1,
+            ClipboardSection::Commands => 2,
         });
         s.search
             .setPlaceholderString(Some(&NSString::from_str(section.placeholder())));
         update_footer(s);
         s.list.setNeedsDisplay(true);
+        changed
     });
+    if changed && section == ClipboardSection::Commands {
+        // Commands are read only when the user opens the tab; there is no
+        // background poll of shell history files.
+        refresh_shell_history();
+    }
 }
 
 fn update_footer(s: &AppState) {
@@ -386,6 +409,7 @@ fn update_footer(s: &AppState) {
     let hint = match s.section {
         ClipboardSection::Text => format!("{label} · ⌘P pin"),
         ClipboardSection::Images => format!("{label} · ⌘E PDF"),
+        ClipboardSection::Commands => format!("{label} · ⌘R refresh"),
     };
     s.footer.setStringValue(&NSString::from_str(&hint));
     s.export_pdf_button
@@ -396,17 +420,19 @@ fn update_footer(s: &AppState) {
             .iter()
             .any(|clip| clip.kind == ClipKind::Image),
     );
+    s.refresh_commands_button
+        .setHidden(s.section != ClipboardSection::Commands);
     s.clear_text_button.setEnabled(
         s.store
             .clips
             .iter()
-            .any(|clip| clip.kind != ClipKind::Image),
+            .any(|clip| section_matches(ClipboardSection::Text, clip)),
     );
     s.clear_images_button.setEnabled(
         s.store
             .clips
             .iter()
-            .any(|clip| clip.kind == ClipKind::Image),
+            .any(|clip| section_matches(ClipboardSection::Images, clip)),
     );
 }
 
@@ -543,15 +569,20 @@ define_class!(
         #[unsafe(method(sectionChanged:))]
         fn section_changed(&self, sender: &NSSegmentedControl) {
             guard("section_changed", || {
-                let section = if sender.selectedSegment() == 1 {
-                    ClipboardSection::Images
-                } else {
-                    ClipboardSection::Text
+                let section = match sender.selectedSegment() {
+                    1 => ClipboardSection::Images,
+                    2 => ClipboardSection::Commands,
+                    _ => ClipboardSection::Text,
                 };
                 set_section(section);
                 let (panel, search) = with_state(|s| (s.panel.clone(), s.search.clone()));
                 panel.makeFirstResponder(Some(&search));
             });
+        }
+
+        #[unsafe(method(refreshCommands:))]
+        fn refresh_commands(&self, _sender: &AnyObject) {
+            guard("refresh_commands", refresh_shell_history);
         }
 
         #[unsafe(method(clearThumbnailCache:))]
@@ -793,7 +824,7 @@ fn setup_app() {
     let mtm = main_thread();
     let settings = settings::load();
     let mut store = Store::open();
-    store.trim(settings.max_clips);
+    store.trim_sections(settings.max_clips);
     store.save();
     thumbnails::cleanup_legacy_cache();
     thumbnails::reset_previews();
@@ -846,6 +877,7 @@ fn setup_app() {
         clear_text_button: parts.clear_text_button,
         clear_images_button: parts.clear_images_button,
         export_pdf_button: parts.export_pdf_button,
+        refresh_commands_button: parts.refresh_commands_button,
         pin_outline: parts.pin_outline,
         pin_filled: parts.pin_filled,
         pin_outline_selected: parts.pin_outline_selected,
@@ -892,7 +924,11 @@ fn setup_app() {
     if open_images {
         set_section(ClipboardSection::Images);
     }
-    if open_images || std::env::var_os("ANTIRUSTPASTE_OPEN_PANEL").is_some() {
+    let open_commands = std::env::var_os("ANTIRUSTPASTE_OPEN_COMMANDS").is_some();
+    if open_commands {
+        set_section(ClipboardSection::Commands);
+    }
+    if open_images || open_commands || std::env::var_os("ANTIRUSTPASTE_OPEN_PANEL").is_some() {
         show_panel();
     }
 }
@@ -1037,13 +1073,11 @@ fn poll_pasteboard() {
 
     let mut changed_history = false;
     with_state(|s| {
-        for item in items {
+        for mut item in items {
+            item.source_name = source_name.clone();
+            item.source_bundle = source_bundle.clone();
             let max = s.settings.max_clips;
             if s.store.insert(item, max) {
-                if let Some(clip) = s.store.clips.first_mut() {
-                    clip.source_name = source_name.clone();
-                    clip.source_bundle = source_bundle.clone();
-                }
                 changed_history = true;
             }
         }
@@ -1057,6 +1091,87 @@ fn poll_pasteboard() {
         // Trimming may have removed an old clip; drop its cached thumbnail
         // without clearing the in-memory images that are still valid.
         prune_thumbnail_files();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shell history
+// ---------------------------------------------------------------------------
+
+/// The history files belong to the shell, so paths stay in the macOS shell.
+/// `ANTIRUSTPASTE_SHELL_HISTORY_DIR` keeps tests away from the operator's real
+/// command history.
+fn shell_history_files() -> Vec<ShellFile> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    let base = match std::env::var_os("ANTIRUSTPASTE_SHELL_HISTORY_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+    {
+        Some(dir) => dir,
+        None => {
+            // Safety net for agents and tests: an isolated data directory
+            // without an explicit shell-history override must not fall back to
+            // the operator's real history files.
+            if std::env::var_os("ANTIRUSTPASTE_DATA_DIR").is_some_and(|value| !value.is_empty()) {
+                return Vec::new();
+            }
+            home
+        }
+    };
+    vec![
+        ShellFile {
+            shell: Shell::Zsh,
+            path: base.join(".zsh_history"),
+        },
+        ShellFile {
+            shell: Shell::Bash,
+            path: base.join(".bash_history"),
+        },
+    ]
+}
+
+/// Read new commands on demand, when the Commands tab is opened or the user
+/// asks for a refresh. This is the only place that touches shell history.
+fn refresh_shell_history() {
+    let (dir, max) = with_state(|s| (s.store.dir().to_path_buf(), s.settings.max_clips));
+    let cursor_path = dir.join("shell-history.json");
+    let mut cursors = load_cursors(&cursor_path);
+    let files = shell_history_files();
+    let now = now_ms();
+    let mut reads = Vec::with_capacity(files.len());
+    for file in &files {
+        reads.push(read_new(file, &mut cursors, max, now));
+    }
+    let cursor_changed = reads.iter().any(|read| read.cursor_changed);
+    // zsh and bash are read separately; merge them by timestamp so the
+    // Commands list is newest-first across both files.
+    let mut commands: Vec<_> = reads.into_iter().flat_map(|read| read.commands).collect();
+    commands.sort_by_key(|command| command.date_ms);
+
+    let mut changed = false;
+    with_state(|s| {
+        for command in &commands {
+            if s.store.upsert_command(
+                &command.text,
+                command.shell.label(),
+                command.date_ms,
+                max,
+                command.may_move,
+            ) {
+                changed = true;
+            }
+        }
+        if changed {
+            s.store.save();
+        }
+    });
+    if cursor_changed {
+        save_cursors(&cursor_path, &cursors);
+    }
+    if changed {
+        refresh_ui();
     }
 }
 
@@ -1188,9 +1303,11 @@ fn show_panel() {
     position_panel();
     with_state(|s| s.pending_show = true);
     let block = RcBlock::new(|_timer: NonNull<NSTimer>| {
-        if with_state(|s| s.pending_show) {
-            present_panel();
-        }
+        guard("present_panel", || {
+            if with_state(|s| s.pending_show) {
+                present_panel();
+            }
+        });
     });
     unsafe {
         // Present after the status-item mouse event has finished dispatching.
@@ -1211,6 +1328,9 @@ fn present_panel() {
     NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
     panel.makeKeyAndOrderFront(None);
     panel.makeFirstResponder(Some(&search));
+    if with_state(|s| s.section == ClipboardSection::Commands) {
+        refresh_shell_history();
+    }
 }
 
 pub(crate) fn handle_list_click(view: &ClipListView, event: &NSEvent) {
@@ -1388,15 +1508,38 @@ pub(crate) fn handle_key_event(event: &NSEvent) -> bool {
     let flags = event.modifierFlags().0;
 
     if flags & NS_COMMAND != 0 {
+        if flags & NS_SHIFT != 0 && flags & (NS_OPTION | NS_CONTROL) == 0 {
+            match key {
+                18 => {
+                    set_section(ClipboardSection::Text);
+                    return true;
+                }
+                19 => {
+                    set_section(ClipboardSection::Images);
+                    return true;
+                }
+                20 => {
+                    set_section(ClipboardSection::Commands);
+                    return true;
+                }
+                _ => {}
+            }
+        }
+
+        // ⌘1…⌘9 paste the Nth visible row of the active tab, after filtering.
+        if flags & (NS_SHIFT | NS_OPTION | NS_CONTROL) == 0
+            && let Some(character) = event
+                .charactersIgnoringModifiers()
+                .and_then(|value| value.to_string().chars().next())
+            && let Some(digit) = character
+                .to_digit(10)
+                .filter(|digit| (1..=9).contains(digit))
+        {
+            paste_filtered(digit as usize - 1, true);
+            return true;
+        }
+
         match key {
-            18 => {
-                set_section(ClipboardSection::Text);
-                return true;
-            }
-            19 => {
-                set_section(ClipboardSection::Images);
-                return true;
-            }
             35 => {
                 toggle_pin_selected();
                 return true;
@@ -1407,6 +1550,10 @@ pub(crate) fn handle_key_event(event: &NSEvent) -> bool {
             }
             16 => {
                 toggle_image_preview();
+                return true;
+            }
+            15 if with_state(|s| s.section == ClipboardSection::Commands) => {
+                refresh_shell_history();
                 return true;
             }
             _ => {}
@@ -1619,10 +1766,7 @@ fn clear_section(section: ClipboardSection) {
             .store
             .clips
             .iter()
-            .filter(|clip| match section {
-                ClipboardSection::Images => clip.kind == ClipKind::Image,
-                ClipboardSection::Text => clip.kind != ClipKind::Image,
-            })
+            .filter(|clip| section_matches(section, clip))
             .count();
         (count, s.settings.confirm_delete)
     });
@@ -1643,6 +1787,10 @@ fn clear_section(section: ClipboardSection) {
                 "Delete all images?",
                 "This removes every copied image and its thumbnail. Text clippings are kept. This action cannot be undone.",
             ),
+            ClipboardSection::Commands => (
+                "Delete all terminal commands?",
+                "This removes every command read from your shell history. Clippings are kept. This action cannot be undone.",
+            ),
         };
         alert.setMessageText(&NSString::from_str(message));
         alert.setInformativeText(&NSString::from_str(info));
@@ -1654,10 +1802,7 @@ fn clear_section(section: ClipboardSection) {
     }
 
     with_state(|s| {
-        s.store.remove_where(|clip| match section {
-            ClipboardSection::Images => clip.kind == ClipKind::Image,
-            ClipboardSection::Text => clip.kind != ClipKind::Image,
-        });
+        s.store.remove_where(|clip| section_matches(section, clip));
         s.store.save();
         s.selected = 0;
         s.scroll = 0.0;
@@ -1674,7 +1819,7 @@ fn clear_all() {
         let alert = NSAlert::new(mtm);
         alert.setMessageText(&NSString::from_str("Delete all clippings?"));
         alert.setInformativeText(&NSString::from_str(
-            "This permanently removes your clipboard history. This action cannot be undone.",
+            "This permanently removes your clipboard history. Terminal commands are kept. This action cannot be undone.",
         ));
         alert.addButtonWithTitle(&NSString::from_str("Delete All"));
         alert.addButtonWithTitle(&NSString::from_str("Cancel"));
@@ -1684,7 +1829,9 @@ fn clear_all() {
     }
 
     let search = with_state(|s| {
-        s.store.clear();
+        // "Clear All Clippings" leaves shell commands alone: they are read from
+        // the user's own history file, not captured from the pasteboard.
+        s.store.remove_where(|clip| clip.kind != ClipKind::Command);
         s.store.save();
         s.selected = 0;
         s.scroll = 0.0;
@@ -1733,7 +1880,7 @@ fn open_preferences() {
                 .max_field
                 .setStringValue(&NSString::from_str(&s.settings.max_clips.to_string()));
             prefs.max_label.setStringValue(&NSString::from_str(&format!(
-                "Maximum: {} clippings",
+                "Maximum: {} per section",
                 s.settings.max_clips
             )));
             prefs.record_box.setState(if s.settings.record {
@@ -1768,10 +1915,23 @@ fn open_preferences() {
 
 fn max_clips_changed(sender: &NSTextField) {
     let mtm = main_thread();
-    let (old, count, confirm) = with_state(|s| {
+    let (old, clips, commands, confirm) = with_state(|s| {
+        let clips = s
+            .store
+            .clips
+            .iter()
+            .filter(|clip| clip.kind != ClipKind::Command)
+            .count();
+        let commands = s
+            .store
+            .clips
+            .iter()
+            .filter(|clip| clip.kind == ClipKind::Command)
+            .count();
         (
             s.settings.max_clips,
-            s.store.clips.len(),
+            clips,
+            commands,
             s.settings.confirm_delete,
         )
     });
@@ -1787,12 +1947,12 @@ fn max_clips_changed(sender: &NSTextField) {
         return;
     }
 
-    if new_limit < count && confirm {
+    if (new_limit < clips || new_limit < commands) && confirm {
         activate_app();
         let alert = NSAlert::new(mtm);
-        alert.setMessageText(&NSString::from_str("Reduce the clipping limit?"));
+        alert.setMessageText(&NSString::from_str("Reduce the history limit?"));
         alert.setInformativeText(&NSString::from_str(&format!(
-            "You currently have {count} clippings stored. Reducing the limit to {new_limit} will permanently remove the oldest clippings."
+            "You currently have {clips} clippings and {commands} commands stored. Reducing the limit to {new_limit} will permanently remove the oldest items from each section that exceeds it."
         )));
         alert.addButtonWithTitle(&NSString::from_str("Continue"));
         alert.addButtonWithTitle(&NSString::from_str("Cancel"));
@@ -1804,7 +1964,7 @@ fn max_clips_changed(sender: &NSTextField) {
 
     with_state(|s| {
         s.settings.max_clips = new_limit;
-        s.store.trim(new_limit);
+        s.store.trim_sections(new_limit);
         s.store.save();
         settings::save(&s.settings);
     });
@@ -1812,7 +1972,7 @@ fn max_clips_changed(sender: &NSTextField) {
     with_state(|s| {
         if let Some(prefs) = &s.prefs {
             prefs.max_label.setStringValue(&NSString::from_str(&format!(
-                "Maximum: {new_limit} clippings"
+                "Maximum: {new_limit} per section"
             )));
         }
     });

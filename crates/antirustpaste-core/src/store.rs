@@ -25,6 +25,8 @@ pub enum ClipKind {
     Image,
     File,
     Other,
+    /// A command read from a shell history file.
+    Command,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -63,6 +65,7 @@ impl Clip {
                 ClipKind::Html => "HTML",
                 ClipKind::Image => "Image",
                 ClipKind::File => "File",
+                ClipKind::Command => "Command",
                 ClipKind::Other => "Clipboard item",
             }
         } else {
@@ -90,6 +93,9 @@ pub struct Captured {
     pub byte_len: usize,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    /// App or shell that produced the item. Commands use the shell name.
+    pub source_name: Option<String>,
+    pub source_bundle: Option<String>,
 }
 
 pub struct Store {
@@ -208,6 +214,7 @@ impl Store {
     /// Insert a captured item. Returns true when the history changed.
     pub fn insert(&mut self, captured: Captured, max: usize) -> bool {
         let hash = hash_captured(&captured);
+        let is_command = captured.kind == ClipKind::Command;
 
         // Re-copying something that is already in the history moves it to the
         // top instead of creating a duplicate. A pinned duplicate stays pinned.
@@ -233,8 +240,8 @@ impl Store {
             byte_len: captured.byte_len,
             width: captured.width,
             height: captured.height,
-            source_name: None,
-            source_bundle: None,
+            source_name: captured.source_name,
+            source_bundle: captured.source_bundle,
             date_ms: chrono::Utc::now().timestamp_millis(),
             hash,
             pinned: was_pinned,
@@ -245,15 +252,37 @@ impl Store {
             self.clips.iter().filter(|clip| clip.pinned).count()
         };
         self.clips.insert(insert_at, clip);
-        self.trim(max);
+        // Clipboard items and shell commands have independent budgets, so a
+        // busy shell cannot evict the clipboard history (or the reverse).
+        self.trim_where(max, |clip| (clip.kind == ClipKind::Command) == is_command);
         true
     }
 
     /// Trim unpinned clips to `max`; pinned clips never count and never leave.
     pub fn trim(&mut self, max: usize) {
+        self.trim_where(max, |_| true);
+    }
+
+    /// Trim both groups independently, keeping up to `max` of each.
+    pub fn trim_sections(&mut self, max: usize) {
+        self.trim_where(max, |clip| clip.kind == ClipKind::Command);
+        self.trim_where(max, |clip| clip.kind != ClipKind::Command);
+    }
+
+    fn trim_where(&mut self, max: usize, group: impl Fn(&Clip) -> bool) {
         let max = max.max(1);
-        while self.clips.iter().filter(|clip| !clip.pinned).count() > max {
-            let Some(index) = self.clips.iter().rposition(|clip| !clip.pinned) else {
+        while self
+            .clips
+            .iter()
+            .filter(|clip| !clip.pinned && group(clip))
+            .count()
+            > max
+        {
+            let Some(index) = self
+                .clips
+                .iter()
+                .rposition(|clip| !clip.pinned && group(clip))
+            else {
                 break;
             };
             let old = self.clips.remove(index);
@@ -261,6 +290,76 @@ impl Store {
                 self.delete_blob(&blob);
             }
         }
+    }
+
+    /// Insert a command read from a shell history file, or refresh an existing
+    /// entry. `may_move` is false when the caller re-read a rewritten history
+    /// file and must not reorder commands that were already known.
+    pub fn upsert_command(
+        &mut self,
+        text: &str,
+        shell: &str,
+        date_ms: i64,
+        max: usize,
+        may_move: bool,
+    ) -> bool {
+        if text.trim().is_empty() {
+            return false;
+        }
+        let captured = Captured {
+            kind: ClipKind::Command,
+            preview: make_preview(text),
+            text: Some(text.to_string()),
+            data_type: None,
+            data: None,
+            byte_len: text.len(),
+            width: None,
+            height: None,
+            source_name: Some(shell.to_string()),
+            source_bundle: None,
+        };
+        let hash = hash_captured(&captured);
+
+        if let Some(pos) = self.clips.iter().position(|clip| clip.hash == hash) {
+            let Some(existing) = self.clips.get(pos) else {
+                return false;
+            };
+            if !may_move || date_ms <= existing.date_ms {
+                return false;
+            }
+            let pinned = existing.pinned;
+            let mut clip = self.clips.remove(pos);
+            clip.date_ms = date_ms;
+            clip.source_name = captured.source_name;
+            let insert_at = if pinned {
+                0
+            } else {
+                self.clips.iter().filter(|clip| clip.pinned).count()
+            };
+            self.clips.insert(insert_at, clip);
+            return true;
+        }
+
+        let clip = Clip {
+            id: Uuid::new_v4().to_string(),
+            kind: ClipKind::Command,
+            preview: captured.preview,
+            text: captured.text,
+            data_type: None,
+            blob: None,
+            byte_len: captured.byte_len,
+            width: None,
+            height: None,
+            source_name: captured.source_name,
+            source_bundle: None,
+            date_ms,
+            hash,
+            pinned: false,
+        };
+        let insert_at = self.clips.iter().filter(|clip| clip.pinned).count();
+        self.clips.insert(insert_at, clip);
+        self.trim_where(max, |clip| clip.kind == ClipKind::Command);
+        true
     }
 
     /// Pin or unpin a clip and move it into the matching group. Returns its new
@@ -476,6 +575,8 @@ mod tests {
             byte_len: text.len(),
             width: None,
             height: None,
+            source_name: None,
+            source_bundle: None,
         }
     }
 
@@ -489,6 +590,8 @@ mod tests {
             byte_len: bytes.len(),
             width: None,
             height: None,
+            source_name: None,
+            source_bundle: None,
         }
     }
 
@@ -561,6 +664,137 @@ mod tests {
         assert!(!store.clips[0].pinned);
         assert_eq!(store.clips[0].text.as_deref(), Some("one"));
         assert!(!store.clips[1].pinned);
+    }
+
+    #[test]
+    fn commands_use_their_own_trim_budget() {
+        let temp = TempDir::new();
+        let mut store = temp.store();
+
+        store.insert(text_clip("clip one"), 1);
+        store.upsert_command("echo one", "zsh", 1_700_000_000_000, 1, true);
+        store.insert(text_clip("clip two"), 1);
+        store.upsert_command("echo two", "zsh", 1_700_000_001_000, 1, true);
+
+        let clips = store
+            .clips
+            .iter()
+            .filter(|clip| clip.kind != ClipKind::Command)
+            .count();
+        let commands = store
+            .clips
+            .iter()
+            .filter(|clip| clip.kind == ClipKind::Command)
+            .count();
+        assert_eq!(clips, 1);
+        assert_eq!(commands, 1);
+        assert!(
+            store
+                .clips
+                .iter()
+                .any(|clip| clip.kind == ClipKind::Command
+                    && clip.text.as_deref() == Some("echo two"))
+        );
+    }
+
+    #[test]
+    fn trim_sections_applies_the_limit_to_each_group() {
+        let temp = TempDir::new();
+        let mut store = temp.store();
+
+        store.insert(text_clip("one"), 10);
+        store.insert(text_clip("two"), 10);
+        store.upsert_command("echo one", "zsh", 1, 10, true);
+        store.upsert_command("echo two", "zsh", 2, 10, true);
+
+        store.trim_sections(1);
+
+        assert_eq!(
+            store
+                .clips
+                .iter()
+                .filter(|clip| clip.kind != ClipKind::Command)
+                .count(),
+            1
+        );
+        assert_eq!(
+            store
+                .clips
+                .iter()
+                .filter(|clip| clip.kind == ClipKind::Command)
+                .count(),
+            1
+        );
+        assert!(
+            store
+                .clips
+                .iter()
+                .any(|clip| clip.text.as_deref() == Some("two"))
+        );
+        assert!(
+            store
+                .clips
+                .iter()
+                .any(|clip| clip.text.as_deref() == Some("echo two"))
+        );
+    }
+
+    #[test]
+    fn a_repeated_command_moves_only_when_allowed_and_newer() {
+        let temp = TempDir::new();
+        let mut store = temp.store();
+
+        assert!(store.upsert_command("ls -la", "zsh", 1_000, 10, true));
+        assert!(!store.upsert_command("ls -la", "zsh", 2_000, 10, false));
+        assert_eq!(store.clips.len(), 1);
+        assert_eq!(store.clips[0].date_ms, 1_000);
+
+        assert!(store.upsert_command("ls -la", "zsh", 3_000, 10, true));
+        assert_eq!(store.clips[0].date_ms, 3_000);
+        assert!(!store.upsert_command("ls -la", "zsh", 2_500, 10, true));
+        assert_eq!(store.clips[0].date_ms, 3_000);
+    }
+
+    #[test]
+    fn a_pinned_command_is_exempt_from_the_command_budget() {
+        let temp = TempDir::new();
+        let mut store = temp.store();
+
+        store.upsert_command("pinned command", "bash", 1, 1, true);
+        store.set_pinned(0, true).expect("pin command");
+        store.upsert_command("newer command", "bash", 2, 1, true);
+
+        let commands = store
+            .clips
+            .iter()
+            .filter(|clip| clip.kind == ClipKind::Command)
+            .count();
+        assert_eq!(commands, 2);
+        assert!(store.clips[0].pinned);
+    }
+
+    #[test]
+    fn insert_keeps_the_source_on_the_new_clip_even_with_pinned_entries() {
+        let temp = TempDir::new();
+        let mut store = temp.store();
+
+        store.insert(text_clip("pinned"), 10);
+        store.set_pinned(0, true).expect("pin first clip");
+
+        let mut second = text_clip("second");
+        second.source_name = Some("Safari".to_string());
+        second.source_bundle = Some("com.apple.Safari".to_string());
+        store.insert(second, 10);
+
+        assert_eq!(store.clips[0].text.as_deref(), Some("pinned"));
+        assert_eq!(store.clips[0].source_name, None);
+        let inserted = store
+            .clips
+            .iter()
+            .find(|clip| clip.text.as_deref() == Some("second"))
+            .expect("second clip");
+        assert_eq!(inserted.source_name.as_deref(), Some("Safari"));
+        assert_eq!(inserted.source_bundle.as_deref(), Some("com.apple.Safari"));
     }
 
     #[test]

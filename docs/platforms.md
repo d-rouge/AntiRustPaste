@@ -24,6 +24,7 @@ crates/
     src/store.rs                 Clip/Captured, JSON + blobs, dedup, trim
     src/settings.rs              Settings, IgnoredApp, Modifiers
     src/filter.rs                Section and search filtering
+    src/shell_history.rs         zsh/bash parsing, bounded reads, cursors
     src/thumbnails.rs            cache worker, jobs, prune, clear
   antirustpaste-imaging/              pure-Rust image metadata + thumbnails
   antirustpaste-pdf/                  pure-Rust image-to-PDF writer
@@ -73,7 +74,8 @@ They depend on core; core never depends on a shell.
 | Thumbnail cache path | ✅ `/tmp/...` (boot-cleared) | ⬜ `%TEMP%\AntiRustPaste` | ⬜ `$XDG_CACHE_HOME`/tmp |
 | Image export to PDF | ✅ `antirustpaste-pdf` + `NSSavePanel` | ⬜ shell save dialog | ⬜ shell save dialog |
 | Quick Look preview | ✅ `QLPreviewPanel` | ⬜ shell preview | ⬜ shell preview |
-| Tests | ✅ 12 shell + 22 core + 12 imaging + 6 PDF | ⬜ | ⬜ |
+| Shell command history | ✅ zsh/bash on demand | ⬜ PowerShell/`ConsoleHost_history.txt` | ⬜ bash/zsh/fish paths |
+| Tests | ✅ 12 shell + 37 core + 12 imaging + 6 PDF | ⬜ | ⬜ |
 
 Legend: ✅ done, ⬜ not implemented.
 
@@ -82,7 +84,10 @@ Legend: ✅ done, ⬜ not implemented.
 - Menu bar item with the highlighter-and-check template icon (tooltip
   `AntiRustPaste — clipboard history`).
 - Left-click toggles the popup; right-click opens the status menu.
-- Popup: search, Text/Images tabs, keyboard navigation, paste, delete, clear.
+- Popup: search, Text/Images/Commands tabs, keyboard navigation, paste, delete,
+  clear and one-key paste with ⌘1…⌘9.
+- Shell history: zsh and bash files are read on demand when the Commands tab is
+  opened or refreshed; no background watcher.
 - Native pasteboard capture: text, RTF/RTFD, HTML, PNG/TIFF/JPEG images, file
   URLs. Concealed/transient items are skipped.
 - Preferences: max clips, recording, confirmations, login item, shortcut
@@ -98,7 +103,8 @@ Files: `apps/antirustpaste-macos/src/`.
 
 Known macOS gaps: no per-row accessibility elements in the hand-drawn list, no
 image grid, EXIF orientation is not applied, no encryption at rest, PDF export
-has no page options or progress indicator.
+has no page options or progress indicator, and shell history appears only when
+the shell flushes its file (zsh does so on exit unless configured otherwise).
 
 ## Clipboard backend candidates
 
@@ -183,7 +189,10 @@ desktop/compositor in the PR/handoff.
   saves, corrupt-index quarantine, blob validation and missing-blob recovery.
 - Preview normalisation, relative time, human-readable sizes.
 - `Settings` and `IgnoredApp` models; `Modifiers` bits independent of any OS.
-- `Section` and `filter_indices(clips, section, query)`.
+- `Section` and `filter_indices(clips, section, query)` for Text/Images/Commands.
+- `shell_history`: zsh/bash parsing, bounded tail/delta reads and cursor state;
+  a shell supplies the paths and its own `ANTIRUSTPASTE_SHELL_HISTORY_DIR`-style
+  override.
 - `ThumbnailService` with one worker, pending-job de-duplication, generation
   epochs, prune and clear; `prune_now(dir, valid)` for startup.
 - `antirustpaste_imaging::info` and `thumbnail_png` with 32 MP/512 px caps.
@@ -227,9 +236,13 @@ desktop/compositor in the PR/handoff.
 | `ANTIRUSTPASTE_DEFAULTS_SUITE` | macOS shell | isolated `NSUserDefaults` suite |
 | `ANTIRUSTPASTE_LAUNCH_AGENT_DIR` | macOS shell | login-item plist directory |
 | `ANTIRUSTPASTE_THUMB_CACHE_DIR` | macOS shell | absolute, dedicated thumbnail cache |
+| `ANTIRUSTPASTE_SHELL_HISTORY_DIR` | macOS shell | directory holding `.zsh_history`/`.bash_history` |
 | `ANTIRUSTPASTE_OPEN_PREFS` | macOS shell | automation: open Preferences |
 | `ANTIRUSTPASTE_OPEN_PANEL` | macOS shell | automation: open popup |
 | `ANTIRUSTPASTE_OPEN_IMAGES` | macOS shell | automation: open popup on Images |
+| `ANTIRUSTPASTE_OPEN_COMMANDS` | macOS shell | automation: open popup on Commands |
 
 Future shells should keep `ANTIRUSTPASTE_DATA_DIR` and add equivalents for their
-native settings/login-item locations.
+native settings/login-item locations. When `ANTIRUSTPASTE_DATA_DIR` is set
+without `ANTIRUSTPASTE_SHELL_HISTORY_DIR`, the macOS shell reads no shell
+history, so isolated test runs never fall back to the operator's real files.

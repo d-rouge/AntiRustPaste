@@ -187,6 +187,7 @@ fn dot_color(kind: ClipKind) -> Retained<NSColor> {
         ClipKind::Html => NSColor::systemIndigoColor(),
         ClipKind::Image => NSColor::systemGreenColor(),
         ClipKind::File => NSColor::systemOrangeColor(),
+        ClipKind::Command => NSColor::systemTealColor(),
         ClipKind::Other => NSColor::systemGrayColor(),
     }
 }
@@ -1129,6 +1130,7 @@ pub(crate) struct PanelParts {
     pub clear_text_button: Retained<NSButton>,
     pub clear_images_button: Retained<NSButton>,
     pub export_pdf_button: Retained<NSButton>,
+    pub refresh_commands_button: Retained<NSButton>,
     pub pin_outline: Option<Retained<NSImage>>,
     pub pin_filled: Option<Retained<NSImage>>,
     pub pin_outline_selected: Option<Retained<NSImage>>,
@@ -1174,7 +1176,8 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
 
     let text_label = NSString::from_str("Text");
     let images_label = NSString::from_str("Images");
-    let labels = NSArray::from_slice(&[&*text_label, &*images_label]);
+    let commands_label = NSString::from_str("Commands");
+    let labels = NSArray::from_slice(&[&*text_label, &*images_label, &*commands_label]);
     let section_control = unsafe {
         NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
             &labels,
@@ -1185,17 +1188,27 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
         )
     };
     section_control.setFrame(NSRect::new(
-        NSPoint::new(PANEL_W - 12.0 - 128.0, PANEL_H - SEARCH_H + 2.0),
-        NSSize::new(128.0, 24.0),
+        NSPoint::new(PANEL_W - 12.0 - 126.0, PANEL_H - SEARCH_H + 2.0),
+        NSSize::new(126.0, 24.0),
     ));
     section_control.setSelectedSegment(0);
-    section_control.setToolTip_forSegment(
-        Some(&NSString::from_str(
+    for (index, symbol, description) in [
+        (
+            0,
+            "text.alignleft",
             "Text, rich text, HTML and file clippings",
-        )),
-        0,
-    );
-    section_control.setToolTip_forSegment(Some(&NSString::from_str("Copied images")), 1);
+        ),
+        (1, "photo", "Copied images"),
+        (2, "terminal", "Terminal commands from zsh and bash"),
+    ] {
+        if let Some(image) = segment_symbol(symbol, description) {
+            section_control.setImage_forSegment(Some(&image), index);
+            section_control.setLabel_forSegment(&NSString::from_str(""), index);
+        }
+        section_control.setWidth_forSegment(42.0, index);
+        section_control.setToolTip_forSegment(Some(&NSString::from_str(description)), index);
+    }
+    section_control.setAccessibilityLabel(Some(&NSString::from_str("Sections")));
     bg.addSubview(&section_control);
 
     let list = ClipListView::create(mtm);
@@ -1275,6 +1288,27 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
     export_pdf_button.setHidden(true);
     bg.addSubview(&export_pdf_button);
 
+    let refresh_commands_button = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str("Refresh"),
+            Some(as_any(delegate)),
+            Some(sel!(refreshCommands:)),
+            mtm,
+        )
+    };
+    refresh_commands_button.setFrame(NSRect::new(
+        NSPoint::new(166.0, 6.0),
+        NSSize::new(62.0, 22.0),
+    ));
+    refresh_commands_button.setBezelStyle(NSBezelStyle::Automatic);
+    refresh_commands_button.setControlSize(NSControlSize::Small);
+    refresh_commands_button.setFont(Some(&NSFont::systemFontOfSize(10.0)));
+    refresh_commands_button.setToolTip(Some(&NSString::from_str(
+        "Read new commands from your zsh and bash history (⌘R)",
+    )));
+    refresh_commands_button.setHidden(true);
+    bg.addSubview(&refresh_commands_button);
+
     let pin_outline = pin_symbol(
         "pin",
         &NSColor::secondaryLabelColor().colorWithAlphaComponent(0.8),
@@ -1293,11 +1327,23 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
         clear_text_button,
         clear_images_button,
         export_pdf_button,
+        refresh_commands_button,
         pin_outline,
         pin_filled,
         pin_outline_selected,
         pin_filled_selected,
     }
+}
+
+fn segment_symbol(name: &str, description: &str) -> Option<Retained<NSImage>> {
+    let base = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+        &NSString::from_str(name),
+        Some(&NSString::from_str(description)),
+    )?;
+    let config = NSImageSymbolConfiguration::configurationWithPointSize_weight(13.0, 0.0);
+    let image = base.imageWithSymbolConfiguration(&config)?;
+    image.setTemplate(true);
+    Some(image)
 }
 
 fn pin_symbol(name: &str, color: &NSColor) -> Option<Retained<NSImage>> {
@@ -1414,14 +1460,14 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
     general.addSubview(&max_field);
 
     general.addSubview(&label(
-        "clippings",
+        "items",
         NSRect::new(NSPoint::new(190.0, 308.0), NSSize::new(80.0, 20.0)),
         13.0,
         mtm,
     ));
 
     let max_label = secondary_label(
-        "Maximum: 200 clippings",
+        "Maximum: 200 per section",
         NSRect::new(NSPoint::new(270.0, 308.0), NSSize::new(190.0, 20.0)),
         11.0,
         mtm,

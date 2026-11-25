@@ -46,17 +46,21 @@ paths:
 
 ```sh
 SCRATCH="$(mktemp -d)"
+mkdir -p "$SCRATCH/shell"
 ANTIRUSTPASTE_DATA_DIR="$SCRATCH/data" \
 ANTIRUSTPASTE_DEFAULTS_SUITE="com.antirustpaste.dev.$$" \
 ANTIRUSTPASTE_LAUNCH_AGENT_DIR="$SCRATCH/LaunchAgents" \
 ANTIRUSTPASTE_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
+ANTIRUSTPASTE_SHELL_HISTORY_DIR="$SCRATCH/shell" \
 ANTIRUSTPASTE_OPEN_IMAGES=1 ANTIRUSTPASTE_OPEN_PANEL=1 \
 ./target/debug/antirustpaste
 ```
 
 `./scripts/smoke.sh` does this for you. `ANTIRUSTPASTE_SMOKE_PREFS=1` opens
-Preferences; `ANTIRUSTPASTE_SMOKE_PANEL=1` opens the history popup. The script kills
-only its own process and removes its scratch directory on success.
+Preferences; `ANTIRUSTPASTE_SMOKE_PANEL=1` opens the history popup;
+`ANTIRUSTPASTE_SMOKE_COMMANDS=1` writes synthetic shell history and opens the
+Commands tab. The script kills only its own process and removes its scratch
+directory on success.
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
@@ -64,12 +68,18 @@ only its own process and removes its scratch directory on success.
 | `ANTIRUSTPASTE_DEFAULTS_SUITE` | `NSUserDefaults` suite | bundle/process domain |
 | `ANTIRUSTPASTE_LAUNCH_AGENT_DIR` | Login-item plist directory | `~/Library/LaunchAgents` |
 | `ANTIRUSTPASTE_THUMB_CACHE_DIR` | Absolute, dedicated thumbnail cache | `/tmp/AntiRustPaste-<user>-<hash>/thumbnails` (boot-cleared on macOS) |
+| `ANTIRUSTPASTE_SHELL_HISTORY_DIR` | Directory with `.zsh_history`/`.bash_history` | `$HOME` |
 | `ANTIRUSTPASTE_OPEN_PREFS=1` | Open Preferences at launch | off |
 | `ANTIRUSTPASTE_OPEN_PANEL=1` | Open the popup at launch | off |
 | `ANTIRUSTPASTE_OPEN_IMAGES=1` | Start the popup on Images | off |
+| `ANTIRUSTPASTE_OPEN_COMMANDS=1` | Start the popup on Commands (reads shell history) | off |
 
-An override must be an absolute, dedicated directory. `/`, `/tmp`, the home
-directory and relative paths are ignored and the default is used instead.
+The thumbnail cache override must be an absolute, dedicated directory. `/`,
+`/tmp`, the home directory and relative paths are ignored and the default is
+used instead. The shell history override must point at a scratch directory with
+synthetic files, never at the operator's real home directory. When
+`ANTIRUSTPASTE_DATA_DIR` is set without `ANTIRUSTPASTE_SHELL_HISTORY_DIR`, the
+Commands tab reads no files.
 
 The `ANTIRUSTPASTE_OPEN_*` hooks exist for automation and documentation. They are
 inert unless set. `ANTIRUSTPASTE_SMOKE_IMAGES=1 ./scripts/smoke.sh` exercises the

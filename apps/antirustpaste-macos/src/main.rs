@@ -24,6 +24,8 @@ Environment (for tests and automation):
   ANTIRUSTPASTE_OPEN_PREFS=1       open Preferences at launch
   ANTIRUSTPASTE_OPEN_PANEL=1       open the history popup at launch
   ANTIRUSTPASTE_OPEN_IMAGES=1      start the popup on the Images tab
+  ANTIRUSTPASTE_OPEN_COMMANDS=1    start the popup on the Commands tab
+  ANTIRUSTPASTE_SHELL_HISTORY_DIR  directory holding .zsh_history/.bash_history (default: home)
   ANTIRUSTPASTE_THUMB_CACHE_DIR    absolute dedicated thumbnail cache (default: /tmp on macOS, boot-cleared)
 
 See AGENTS.md and docs/ before changing behaviour.";

@@ -1,9 +1,11 @@
 //! Application state, menu bar item, clipboard polling and all user actions.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::ptr::{NonNull, null_mut};
 use std::time::{Duration, Instant};
 
@@ -30,6 +32,7 @@ use antirustpaste_pdf::PdfImage;
 
 use crate::settings::{self, apply_start_at_login};
 use crate::thumbnails;
+use crate::update;
 use crate::views::{self, ClipListView, ClipPanel, PanelDelegate, PdfExportParts, PrefsParts};
 
 pub(crate) const PANEL_W: f64 = 460.0;
@@ -650,6 +653,13 @@ define_class!(
             });
         }
 
+        #[unsafe(method(checkForUpdates:))]
+        fn check_for_updates(&self, _sender: &AnyObject) {
+            guard("check_for_updates", || {
+                check_for_updates(true);
+            });
+        }
+
         #[unsafe(method(quitApp:))]
         fn quit_app(&self, _sender: &AnyObject) {
             guard("quit_app", || {
@@ -914,6 +924,12 @@ fn setup_app() {
     refresh_ui();
     register_hotkey_from_settings();
     update_frontmost_app();
+
+    // Only a packaged app can replace itself; a `target/` build and a
+    // Gatekeeper-translocated copy fall back to the manual release page.
+    if !update_check_disabled() && update_bundle().is_some() {
+        check_for_updates(false);
+    }
 
     // Automation hooks used by docs/testing.md and scripts/smoke.sh. They are
     // inert unless an agent or test sets them explicitly.
@@ -2613,8 +2629,464 @@ fn show_about() {
         dir
     )));
     alert.addButtonWithTitle(&NSString::from_str("OK"));
-    alert.runModal();
+    alert.addButtonWithTitle(&NSString::from_str("Check for Updates…"));
+    if alert.runModal() == NSAlertSecondButtonReturn {
+        check_for_updates(true);
+    }
 }
+
+// ---------------------------------------------------------------------------
+// Update checking
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// One session for all release requests. Its delegate queue is the main
+    /// queue, so completion handlers run on the AppKit thread.
+    static UPDATE_SESSION: RefCell<Option<Retained<NSURLSession>>> = const { RefCell::new(None) };
+    static UPDATE_BUSY: Cell<bool> = const { Cell::new(false) };
+}
+
+fn update_check_disabled() -> bool {
+    std::env::var_os("ANTIRUSTPASTE_DISABLE_UPDATE_CHECK").is_some()
+}
+
+/// The bundle to replace, when the app was launched from a normal `.app`.
+fn update_bundle() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let bundle = update::bundle_root(&exe)?;
+    if update::is_translocated(&bundle) {
+        None
+    } else {
+        Some(bundle)
+    }
+}
+
+fn update_session() -> Retained<NSURLSession> {
+    UPDATE_SESSION.with(|cell| {
+        if let Some(session) = cell.borrow().as_ref() {
+            return session.clone();
+        }
+        let configuration = NSURLSessionConfiguration::ephemeralSessionConfiguration();
+        configuration.setTimeoutIntervalForRequest(20.0);
+        configuration.setTimeoutIntervalForResource(300.0);
+        let queue = NSOperationQueue::mainQueue();
+        // SAFETY: the delegate queue is the main operation queue, so callbacks
+        // stay on the AppKit thread; no delegate object is installed.
+        let session = unsafe {
+            NSURLSession::sessionWithConfiguration_delegate_delegateQueue(
+                &configuration,
+                None,
+                Some(&queue),
+            )
+        };
+        *cell.borrow_mut() = Some(session.clone());
+        session
+    })
+}
+
+fn fetch_update_bytes(
+    url: &str,
+    limit: usize,
+    done: impl Fn(Result<Vec<u8>, String>) + 'static,
+) {
+    let Some(ns_url) = NSURL::URLWithString(&NSString::from_str(url)) else {
+        done(Err("The update address is not valid.".to_string()));
+        return;
+    };
+    let request = NSMutableURLRequest::requestWithURL(&ns_url);
+    request.setHTTPMethod(&NSString::from_str("GET"));
+    request.setValue_forHTTPHeaderField(
+        Some(&NSString::from_str(&format!(
+            "AntiRustPaste/{}",
+            env!("CARGO_PKG_VERSION")
+        ))),
+        &NSString::from_str("User-Agent"),
+    );
+    request.setValue_forHTTPHeaderField(
+        Some(&NSString::from_str("application/vnd.github+json")),
+        &NSString::from_str("Accept"),
+    );
+
+    let session = update_session();
+    let block = RcBlock::new(
+        move |data: *mut NSData, response: *mut NSURLResponse, error: *mut NSError| {
+            guard("update_http", || {
+                done(read_update_response(data, response, error, limit));
+            });
+        },
+    );
+    // SAFETY: the block matches the selector's declared signature and only
+    // reads the pointers inside the callback, where they are still live.
+    let task = unsafe { session.dataTaskWithRequest_completionHandler(&request, &block) };
+    task.resume();
+}
+
+fn read_update_response(
+    data: *mut NSData,
+    response: *mut NSURLResponse,
+    error: *mut NSError,
+    limit: usize,
+) -> Result<Vec<u8>, String> {
+    // SAFETY: NSURLSession passes live objects to the completion handler; every
+    // pointer is null-checked before it is dereferenced.
+    unsafe {
+        if !error.is_null() {
+            return Err((*error).localizedDescription().to_string());
+        }
+        if data.is_null() {
+            return Err("The server sent no data.".to_string());
+        }
+        if !response.is_null()
+            && let Some(http) = as_any(&*response).downcast_ref::<NSHTTPURLResponse>()
+        {
+            let status = http.statusCode();
+            if !(200..300).contains(&status) {
+                return Err(format!("The server answered with HTTP {status}."));
+            }
+        }
+        let bytes = (*data).to_vec();
+        if bytes.len() > limit {
+            return Err("The server sent more data than expected.".to_string());
+        }
+        Ok(bytes)
+    }
+}
+
+fn check_for_updates(manual: bool) {
+    if !manual && update_check_disabled() {
+        return;
+    }
+    if UPDATE_BUSY.replace(true) {
+        if manual {
+            show_alert(
+                "Check for Updates",
+                "An update check is already in progress.",
+            );
+        }
+        return;
+    }
+
+    fetch_update_bytes(
+        update::RELEASES_API,
+        update::RELEASE_JSON_LIMIT,
+        move |result| {
+            UPDATE_BUSY.set(false);
+            let release = result.and_then(|bytes| {
+                update::latest_release(&bytes, env!("CARGO_PKG_VERSION"))
+            });
+            match release {
+                Ok(Some(available)) => offer_update(available),
+                Ok(None) => {
+                    if manual {
+                        show_alert(
+                            "Check for Updates",
+                            &format!(
+                                "You're up to date. AntiRustPaste {} is the latest version.",
+                                env!("CARGO_PKG_VERSION")
+                            ),
+                        );
+                    }
+                }
+                Err(err) => {
+                    if manual {
+                        show_alert("Could not check for updates", &err);
+                    } else {
+                        eprintln!("antirustpaste: update check failed: {err}");
+                    }
+                }
+            }
+        },
+    );
+}
+
+fn offer_update(available: update::AvailableUpdate) {
+    let bundle = update_bundle();
+    let can_install = bundle.is_some();
+    let mtm = main_thread();
+    activate_app();
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(&format!(
+        "AntiRustPaste {} is available",
+        available.version
+    )));
+    alert.setInformativeText(&NSString::from_str(&format!(
+        "You have version {}.{}",
+        env!("CARGO_PKG_VERSION"),
+        if can_install {
+            " Download and install the update now?\n\nAntiRustPaste restarts to finish the update."
+        } else {
+            " This build cannot update itself; open the release page to download the new version."
+        }
+    )));
+    alert.addButtonWithTitle(&NSString::from_str(if can_install {
+        "Update Now"
+    } else {
+        "Open Release Page"
+    }));
+    alert.addButtonWithTitle(&NSString::from_str("Later"));
+    if alert.runModal() != NSAlertFirstButtonReturn {
+        return;
+    }
+
+    if can_install {
+        download_update(available);
+    } else {
+        open_release_page(&available.page_url);
+    }
+}
+
+fn open_release_page(url: &str) {
+    let opened = NSURL::URLWithString(&NSString::from_str(url))
+        .is_some_and(|url| NSWorkspace::sharedWorkspace().openURL(&url));
+    if !opened {
+        show_alert("Could not open the release page", url);
+    }
+}
+
+fn download_update(available: update::AvailableUpdate) {
+    if UPDATE_BUSY.replace(true) {
+        return;
+    }
+    let Some(sums) = available.sums.clone() else {
+        fetch_update_zip(available, None);
+        return;
+    };
+    let for_zip = available.clone();
+    fetch_update_bytes(&sums.url, update::CHECKSUMS_LIMIT, move |result| {
+        let sums = result.and_then(|bytes| {
+            String::from_utf8(bytes).map_err(|_| "The checksum file is not text.".to_string())
+        });
+        match sums {
+            Ok(sums) => fetch_update_zip(for_zip, Some(sums)),
+            Err(err) => finish_update_error(&err),
+        }
+    });
+}
+
+fn finish_update_error(message: &str) {
+    UPDATE_BUSY.set(false);
+    show_alert("Could not install the update", message);
+}
+
+fn fetch_update_zip(available: update::AvailableUpdate, sums: Option<String>) {
+    let zip = available.zip.clone();
+    let version = available.version;
+    let zip_name = zip.name.clone();
+    fetch_update_bytes(&zip.url, update::ZIP_LIMIT, move |result| {
+        let bytes = match result {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                finish_update_error(&err);
+                return;
+            }
+        };
+        let work = match stage_update(&bytes, &zip_name, version, sums.as_deref()) {
+            Ok(work) => work,
+            Err(err) => {
+                finish_update_error(&err);
+                return;
+            }
+        };
+        UPDATE_BUSY.set(false);
+        prompt_restart(version, work);
+    });
+}
+
+/// Write, verify and unpack the update. Returns the work directory that holds
+/// `extract/AntiRustPaste.app`.
+fn stage_update(
+    zip: &[u8],
+    zip_name: &str,
+    version: update::Version,
+    sums: Option<&str>,
+) -> Result<PathBuf, String> {
+    let work = std::env::temp_dir().join(format!(
+        "antirustpaste-update-{}-{}",
+        std::process::id(),
+        now_ms()
+    ));
+    fs::create_dir_all(&work)
+        .map_err(|err| format!("Could not create a temporary folder: {err}"))?;
+    match stage_update_in(&work, zip, zip_name, version, sums) {
+        Ok(()) => Ok(work),
+        Err(err) => {
+            let _ = fs::remove_dir_all(&work);
+            Err(err)
+        }
+    }
+}
+
+fn stage_update_in(
+    work: &Path,
+    zip: &[u8],
+    zip_name: &str,
+    version: update::Version,
+    sums: Option<&str>,
+) -> Result<(), String> {
+    let zip_path = work.join("update.zip");
+    fs::write(&zip_path, zip)
+        .map_err(|err| format!("Could not save the downloaded update: {err}"))?;
+
+    if let Some(sums) = sums {
+        let expected = update::checksum_for(sums, zip_name).ok_or_else(|| {
+            format!("The checksum file has no entry for {zip_name}.")
+        })?;
+        let actual = sha256_of(&zip_path)?;
+        if actual != expected {
+            return Err("The downloaded update failed its checksum check.".to_string());
+        }
+    }
+
+    let extract = work.join("extract");
+    fs::create_dir_all(&extract)
+        .map_err(|err| format!("Could not create a temporary folder: {err}"))?;
+    let status = Command::new("/usr/bin/ditto")
+        .args(["-x", "-k"])
+        .arg(&zip_path)
+        .arg(&extract)
+        .status()
+        .map_err(|err| format!("Could not unpack the update: {err}"))?;
+    if !status.success() {
+        return Err("The downloaded update could not be unpacked.".to_string());
+    }
+
+    let staged = extract.join("AntiRustPaste.app");
+    if !staged.join("Contents/MacOS/AntiRustPaste").is_file() {
+        return Err("The downloaded archive does not contain AntiRustPaste.app.".to_string());
+    }
+    let info = staged.join("Contents/Info.plist");
+    if plist_value(&info, "CFBundleIdentifier").as_deref()
+        != Some(update::EXPECTED_BUNDLE_IDENTIFIER)
+    {
+        return Err("The downloaded app has a different bundle identifier.".to_string());
+    }
+    let staged_version = version.to_string();
+    if plist_value(&info, "CFBundleShortVersionString").as_deref() != Some(staged_version.as_str())
+    {
+        return Err("The downloaded app has a different version.".to_string());
+    }
+    Ok(())
+}
+
+fn sha256_of(path: &Path) -> Result<String, String> {
+    let output = Command::new("/usr/bin/shasum")
+        .arg("-a")
+        .arg("256")
+        .arg(path)
+        .output()
+        .map_err(|err| format!("Could not run shasum: {err}"))?;
+    if !output.status.success() {
+        return Err("Could not read the downloaded update.".to_string());
+    }
+    let text = String::from_utf8(output.stdout)
+        .map_err(|_| "shasum printed unreadable text.".to_string())?;
+    let hash = text.split_whitespace().next().unwrap_or_default();
+    if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("shasum printed an unexpected result.".to_string());
+    }
+    Ok(hash.to_ascii_lowercase())
+}
+
+fn plist_value(plist: &Path, key: &str) -> Option<String> {
+    let output = Command::new("/usr/libexec/PlistBuddy")
+        .arg("-c")
+        .arg(format!("Print :{key}"))
+        .arg(plist)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(output.stdout).ok()?;
+    let text = text.trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+fn prompt_restart(version: update::Version, work: PathBuf) {
+    let staged = work.join("extract").join("AntiRustPaste.app");
+    let Some(target) = update_bundle() else {
+        let _ = fs::remove_dir_all(&work);
+        show_alert(
+            "Could not install the update",
+            "AntiRustPaste is not running from an app bundle.",
+        );
+        return;
+    };
+    if !can_replace_bundle(&target) {
+        let _ = fs::remove_dir_all(&work);
+        show_alert(
+            "Could not install the update",
+            "AntiRustPaste.app is not writable. Move it to Applications or install the new version manually.",
+        );
+        return;
+    }
+
+    let mtm = main_thread();
+    activate_app();
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(&format!(
+        "AntiRustPaste {version} is ready"
+    )));
+    alert.setInformativeText(&NSString::from_str(
+        "Restart to finish installing the update. Clipboard history and settings are kept.",
+    ));
+    alert.addButtonWithTitle(&NSString::from_str("Restart Now"));
+    alert.addButtonWithTitle(&NSString::from_str("Later"));
+    if alert.runModal() != NSAlertFirstButtonReturn {
+        let _ = fs::remove_dir_all(&work);
+        return;
+    }
+
+    if let Err(err) = launch_installer(&work, &staged, &target) {
+        let _ = fs::remove_dir_all(&work);
+        show_alert("Could not install the update", &err);
+        return;
+    }
+    NSApplication::sharedApplication(mtm).terminate(None);
+}
+
+fn can_replace_bundle(bundle: &Path) -> bool {
+    let Some(parent) = bundle.parent() else {
+        return false;
+    };
+    let probe = parent.join(format!(
+        ".antirustpaste-update-probe-{}",
+        std::process::id()
+    ));
+    match fs::write(&probe, b"probe") {
+        Ok(()) => {
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+fn launch_installer(work: &Path, staged: &Path, target: &Path) -> Result<(), String> {
+    let script = work.join("install.sh");
+    fs::write(&script, update::INSTALL_SCRIPT)
+        .map_err(|err| format!("Could not write the install script: {err}"))?;
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755))
+        .map_err(|err| format!("Could not prepare the install script: {err}"))?;
+
+    Command::new("/bin/sh")
+        .arg(&script)
+        .arg(std::process::id().to_string())
+        .arg(target)
+        .arg(staged)
+        .arg(work)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|err| format!("Could not start the installer: {err}"))?;
+    Ok(())
+}
+
 
 #[cfg(test)]
 mod tests {

@@ -10,6 +10,7 @@ mod paste;
 mod pasteboard;
 mod settings;
 mod thumbnails;
+mod update;
 mod views;
 
 const HELP: &str = "\
@@ -27,6 +28,7 @@ Environment (for tests and automation):
   ANTIRUSTPASTE_OPEN_COMMANDS=1    start the popup on the Commands tab
   ANTIRUSTPASTE_SHELL_HISTORY_DIR  directory holding .zsh_history/.bash_history (default: home)
   ANTIRUSTPASTE_THUMB_CACHE_DIR    absolute dedicated thumbnail cache (default: /tmp on macOS, boot-cleared)
+  ANTIRUSTPASTE_DISABLE_UPDATE_CHECK=1  skip the GitHub release check (tests, smoke runs)
 
 See AGENTS.md and docs/ before changing behaviour.";
 

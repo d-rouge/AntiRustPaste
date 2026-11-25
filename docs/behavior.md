@@ -62,8 +62,9 @@ The popup has two tabs, selected by a segmented control or ⌘1/⌘2:
 Both tabs are newest first. Empty tab: `Your clippings will appear here…` or
 `Your images will appear here…`. No search result: `No clippings found` or
 `No images found`. File URLs stay in Text even when they point at an image.
-- The footer shows `N clipping(s)` / `N image(s)`, the keyboard hints and
-  `⌘1/⌘2 tabs`.
+- The footer shows `N clipping(s)` / `N image(s)`, the paste/delete hints and
+  two buttons: **Clear Text** and **Clear Images**. Each button clears the whole
+  section, not just search results; it is disabled when that section is empty.
 - The list scrolls with the wheel/trackpad and clamps to its content.
 - Relative time: `just now`, `Nm ago`, `Nh ago`, `Nd ago`, then `Mon D`.
 - Preview normalisation: runs of whitespace collapse to one space, leading and
@@ -109,13 +110,9 @@ key.
 
 ## 7. Status menu
 
-- **Recent Clippings** submenu: up to 15 clips, titles truncated to 47
-  characters plus `…`; choosing one writes it and pastes into the remembered
-  target app. Empty list: a disabled `No clippings yet` item.
-- **Show History…** opens the popup.
 - **Preferences…** opens the preferences window.
-- **Clear Clippings** asks for confirmation when enabled, then clears the index
-  and every blob.
+- **Clear All Clippings** asks for confirmation when enabled, then clears the
+  index, every text/image blob and the thumbnail cache (including pending jobs).
 - **About RustClip** shows version, shortcut and history path.
 - **Quit RustClip** terminates the app.
 
@@ -139,6 +136,11 @@ key.
   cleanup for in-flight jobs, then clears the in-memory thumbnail cache. The
   history is untouched; visible images regenerate in the background on the next
   draw.
+
+**Clear Text** removes text, rich text, HTML and file clippings. **Clear Images**
+removes image clippings and their thumbnails. Both respect *Confirm before
+deleting*, keep the other section, and cannot be undone. The status menu's
+**Clear All Clippings** still removes everything, including the thumbnail cache.
 
 ### Exceptions
 

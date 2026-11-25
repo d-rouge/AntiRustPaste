@@ -17,7 +17,7 @@ use crate::hotkey::{self, Hotkey};
 use crate::paste;
 use crate::pasteboard;
 use rustclip_core::{
-    IgnoredApp, MAX_LIMIT, Section, Settings, Store, ThumbnailService,
+    ClipKind, IgnoredApp, MAX_LIMIT, Section, Settings, Store, ThumbnailService,
     filter_indices as core_filter_indices,
 };
 
@@ -85,12 +85,13 @@ pub(crate) struct AppState {
     pub settings: Settings,
     pub status_item: Retained<NSStatusItem>,
     pub menu: Retained<NSMenu>,
-    pub recent_menu: Retained<NSMenu>,
     pub panel: Retained<ClipPanel>,
     pub search: Retained<NSSearchField>,
     pub list: Retained<ClipListView>,
     pub footer: Retained<NSTextField>,
     pub section_control: Retained<NSSegmentedControl>,
+    pub clear_text_button: Retained<NSButton>,
+    pub clear_images_button: Retained<NSButton>,
     pub section: ClipboardSection,
     pub thumbnails: HashMap<u64, Retained<NSImage>>,
     pub thumbnail_failed: HashSet<u64>,
@@ -228,8 +229,20 @@ fn update_footer(s: &AppState) {
     let count = filtered_indices(s).len();
     let label = s.section.footer_label(count);
     s.footer.setStringValue(&NSString::from_str(&format!(
-        "{label}   ·   ⏎ paste   ⌫ delete   esc close   ·   ⌘1/⌘2 tabs"
+        "{label}   ·   ⏎ paste   ⌫ delete"
     )));
+    s.clear_text_button.setEnabled(
+        s.store
+            .clips
+            .iter()
+            .any(|clip| clip.kind != ClipKind::Image),
+    );
+    s.clear_images_button.setEnabled(
+        s.store
+            .clips
+            .iter()
+            .any(|clip| clip.kind == ClipKind::Image),
+    );
 }
 
 fn refresh_ui() {
@@ -348,13 +361,6 @@ define_class!(
             });
         }
 
-        #[unsafe(method(showPopup:))]
-        fn show_popup(&self, _sender: &AnyObject) {
-            guard("show_popup", || {
-                show_panel();
-            });
-        }
-
         #[unsafe(method(sectionChanged:))]
         fn section_changed(&self, sender: &NSSegmentedControl) {
             guard("section_changed", || {
@@ -374,20 +380,24 @@ define_class!(
             guard("clear_thumbnail_cache", clear_thumbnail_cache);
         }
 
-        #[unsafe(method(pasteFromMenu:))]
-        fn paste_from_menu(&self, sender: &NSMenuItem) {
-            guard("paste_from_menu", || {
-                let tag = sender.tag();
-                if tag >= 0 {
-                    paste_store_index(tag as usize, true);
-                }
-            });
-        }
-
         #[unsafe(method(clearHistory:))]
         fn clear_history(&self, _sender: &AnyObject) {
             guard("clear_history", || {
                 clear_all();
+            });
+        }
+
+        #[unsafe(method(clearTextSection:))]
+        fn clear_text_section(&self, _sender: &AnyObject) {
+            guard("clear_text_section", || {
+                clear_section(ClipboardSection::Text);
+            });
+        }
+
+        #[unsafe(method(clearImagesSection:))]
+        fn clear_images_section(&self, _sender: &AnyObject) {
+            guard("clear_images_section", || {
+                clear_section(ClipboardSection::Images);
             });
         }
 
@@ -555,7 +565,7 @@ fn setup_app() {
         }
     }
 
-    let (menu, recent_menu) = build_status_menu(mtm);
+    let menu = build_status_menu(mtm);
     let parts = views::build_panel(mtm, &delegate_ref());
     let panel_delegate = PanelDelegate::create(mtm);
     parts
@@ -567,12 +577,13 @@ fn setup_app() {
         settings,
         status_item,
         menu,
-        recent_menu,
         panel: parts.panel,
         search: parts.search,
         list: parts.list,
         footer: parts.footer,
         section_control: parts.section_control,
+        clear_text_button: parts.clear_text_button,
+        clear_images_button: parts.clear_images_button,
         section: ClipboardSection::Text,
         thumbnails: HashMap::new(),
         thumbnail_failed: HashSet::new(),
@@ -599,7 +610,6 @@ fn setup_app() {
     install_key_monitor();
     install_poll_timer();
     install_thumbnail_timer();
-    rebuild_recent_menu();
     refresh_ui();
     register_hotkey_from_settings();
     update_frontmost_app();
@@ -634,21 +644,11 @@ fn menu_item(
     item
 }
 
-fn build_status_menu(mtm: MainThreadMarker) -> (Retained<NSMenu>, Retained<NSMenu>) {
+fn build_status_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
     let target = delegate_any();
     let menu = NSMenu::new(mtm);
     menu.setAutoenablesItems(false);
 
-    let recent_menu = NSMenu::new(mtm);
-    recent_menu.setAutoenablesItems(false);
-    let recent_item = NSMenuItem::new(mtm);
-    recent_item.setTitle(&NSString::from_str("Recent Clippings"));
-    recent_item.setSubmenu(Some(&recent_menu));
-    recent_item.setEnabled(true);
-    menu.addItem(&recent_item);
-
-    menu.addItem(&NSMenuItem::separatorItem(mtm));
-    menu.addItem(&menu_item("Show History…", sel!(showPopup:), &target, mtm));
     menu.addItem(&menu_item(
         "Preferences…",
         sel!(showPreferences:),
@@ -656,7 +656,7 @@ fn build_status_menu(mtm: MainThreadMarker) -> (Retained<NSMenu>, Retained<NSMen
         mtm,
     ));
     menu.addItem(&menu_item(
-        "Clear Clippings",
+        "Clear All Clippings",
         sel!(clearHistory:),
         &target,
         mtm,
@@ -665,41 +665,7 @@ fn build_status_menu(mtm: MainThreadMarker) -> (Retained<NSMenu>, Retained<NSMen
     menu.addItem(&menu_item("About RustClip", sel!(showAbout:), &target, mtm));
     menu.addItem(&menu_item("Quit RustClip", sel!(quitApp:), &target, mtm));
 
-    (menu, recent_menu)
-}
-
-fn rebuild_recent_menu() {
-    let mtm = main_thread();
-    let target = delegate_any();
-    with_state(|s| {
-        s.recent_menu.removeAllItems();
-        let count = s.store.clips.len().min(15);
-        if count == 0 {
-            let item = NSMenuItem::new(mtm);
-            item.setTitle(&NSString::from_str("No clippings yet"));
-            item.setEnabled(false);
-            s.recent_menu.addItem(&item);
-            return;
-        }
-        for index in 0..count {
-            let Some(clip) = s.store.clips.get(index) else {
-                continue;
-            };
-            let mut title = clip.display_title().to_string();
-            if title.chars().count() > 48 {
-                title = title.chars().take(47).collect::<String>() + "…";
-            }
-            let item = NSMenuItem::new(mtm);
-            item.setTitle(&NSString::from_str(&title));
-            item.setTag(index as isize);
-            unsafe {
-                item.setAction(Some(sel!(pasteFromMenu:)));
-                item.setTarget(Some(&target));
-            }
-            item.setEnabled(true);
-            s.recent_menu.addItem(&item);
-        }
-    });
+    menu
 }
 
 fn install_poll_timer() {
@@ -801,7 +767,6 @@ fn poll_pasteboard() {
     });
 
     if changed_history {
-        rebuild_recent_menu();
         refresh_ui();
         // Trimming may have removed an old clip; drop its cached thumbnail
         // without clearing the in-memory images that are still valid.
@@ -1290,7 +1255,60 @@ fn delete_selected() {
         s.store.remove(index);
         s.store.save();
     });
-    rebuild_recent_menu();
+    refresh_ui();
+    prune_thumbnails();
+}
+
+fn clear_section(section: ClipboardSection) {
+    let mtm = main_thread();
+    let (count, confirm) = with_state(|s| {
+        let count = s
+            .store
+            .clips
+            .iter()
+            .filter(|clip| match section {
+                ClipboardSection::Images => clip.kind == ClipKind::Image,
+                ClipboardSection::Text => clip.kind != ClipKind::Image,
+            })
+            .count();
+        (count, s.settings.confirm_delete)
+    });
+    if count == 0 {
+        NSBeep();
+        return;
+    }
+
+    if confirm {
+        activate_app();
+        let alert = NSAlert::new(mtm);
+        let (message, info) = match section {
+            ClipboardSection::Text => (
+                "Delete all text clippings?",
+                "This removes every text, rich text, HTML and file clipping. Images are kept. This action cannot be undone.",
+            ),
+            ClipboardSection::Images => (
+                "Delete all images?",
+                "This removes every copied image and its thumbnail. Text clippings are kept. This action cannot be undone.",
+            ),
+        };
+        alert.setMessageText(&NSString::from_str(message));
+        alert.setInformativeText(&NSString::from_str(info));
+        alert.addButtonWithTitle(&NSString::from_str("Delete"));
+        alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+        if alert.runModal() != NSAlertFirstButtonReturn {
+            return;
+        }
+    }
+
+    with_state(|s| {
+        s.store.remove_where(|clip| match section {
+            ClipboardSection::Images => clip.kind == ClipKind::Image,
+            ClipboardSection::Text => clip.kind != ClipKind::Image,
+        });
+        s.store.save();
+        s.selected = 0;
+        s.scroll = 0.0;
+    });
     refresh_ui();
     prune_thumbnails();
 }
@@ -1321,9 +1339,10 @@ fn clear_all() {
         s.search.clone()
     });
     search.setStringValue(&NSString::from_str(""));
-    rebuild_recent_menu();
     refresh_ui();
-    prune_thumbnails();
+    // Clear All Clippings removes the thumbnail cache too, including pending
+    // jobs for clips that no longer exist.
+    clear_thumbnail_cache();
 }
 
 // ---------------------------------------------------------------------------
@@ -1444,7 +1463,6 @@ fn max_clips_changed(sender: &NSTextField) {
             )));
         }
     });
-    rebuild_recent_menu();
     refresh_ui();
     prune_thumbnails();
 }

@@ -67,14 +67,14 @@ RUSTCLIP_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
 | --- | --- | --- |
 | 1 | Left-click the menu-bar icon | Popup opens under the icon, search focused |
 | 2 | Press Escape | Popup closes |
-| 3 | Right-click the icon | Status menu with Recent Clippings/Preferences/Clear/About/Quit |
+| 3 | Right-click the icon | Status menu with Preferences/Clear All Clippings/About/Quit |
 | 4 | Copy a synthetic text marker | A new row appears within ~1 s, with source app and "just now" |
 | 5 | Copy the same marker again | Row count unchanged, marker moves to the top |
 | 6 | Type part of the marker | List filters live; footer count updates |
 | 7 | Arrow keys + Return | Selected row is written to the clipboard and ⌘V is sent to the previous app |
 | 8 | ⌘C on a row | Clipboard changes, popup closes, no synthetic paste |
 | 9 | Delete with empty search | Confirmation (if enabled), then row and blob disappear |
-| 10 | Clear Clippings | Confirmation, history empties, blobs removed |
+| 10 | Clear All Clippings | Confirmation, text and images removed, all blobs and thumbnails removed |
 | 11 | Add an ignored app | New clips from it are not captured; existing ones remain |
 | 12 | Change the limit below the current count | Confirmation, oldest rows trimmed |
 | 13 | Record a new shortcut | Old one stops working, new one opens the popup |
@@ -87,6 +87,9 @@ RUSTCLIP_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
 | 20 | Open Images with an image in history | `IMG` placeholder may appear first; thumbnail replaces it within ~0.1–1 s; cache file exists under `RUSTCLIP_THUMB_CACHE_DIR` |
 | 21 | Clear Thumbnail Cache in Preferences | Thumbnails disappear and regenerate in the background on the next draw; history remains |
 | 22 | Delete/clear/trim image clips | Their thumbnail files are pruned; no orphan files remain |
+| 22a | **Clear Text** with text + image clips | Text/HTML/RTF/file clips removed; images remain; button follows confirmation setting |
+| 22b | **Clear Images** with text + image clips | Images and thumbnails removed; text/file clips remain; button follows confirmation setting |
+| 22c | Clear buttons with an empty section | Buttons are disabled; no alert or beep |
 | 23 | Multi-monitor / full-screen app | Popup appears on the status item's screen and above full-screen spaces |
 | 24 | Quit and relaunch | History and preferences persist; thumbnails regenerate if the temp cache was purged |
 

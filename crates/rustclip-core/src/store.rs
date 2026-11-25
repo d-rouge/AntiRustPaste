@@ -261,6 +261,27 @@ impl Store {
         true
     }
 
+    /// Remove every clip matching `remove`, deleting its blob. Returns the
+    /// number of removed clips.
+    pub fn remove_where(&mut self, mut remove: impl FnMut(&Clip) -> bool) -> usize {
+        let mut kept = Vec::with_capacity(self.clips.len());
+        let mut removed = Vec::new();
+        for clip in self.clips.drain(..) {
+            if remove(&clip) {
+                removed.push(clip);
+            } else {
+                kept.push(clip);
+            }
+        }
+        self.clips = kept;
+        for clip in &removed {
+            if let Some(blob) = &clip.blob {
+                self.delete_blob(blob);
+            }
+        }
+        removed.len()
+    }
+
     pub fn clear(&mut self) {
         let blobs: Vec<String> = self.clips.drain(..).filter_map(|clip| clip.blob).collect();
         for blob in blobs {
@@ -459,6 +480,24 @@ mod tests {
         assert_eq!(store.clips.len(), 1);
         assert_eq!(store.clips[0].text.as_deref(), Some("newest"));
         assert!(!blob_path.exists());
+    }
+
+    #[test]
+    fn remove_where_keeps_other_kinds_and_deletes_removed_blobs() {
+        let temp = TempDir::new();
+        let mut store = temp.store();
+
+        store.insert(image_clip(b"keep only text"), 10);
+        let image_blob = store.clips[0].blob.clone().expect("image blob");
+        let image_path = store.blob_path(&image_blob);
+        store.insert(text_clip("keep me"), 10);
+
+        let removed = store.remove_where(|clip| clip.kind == ClipKind::Image);
+
+        assert_eq!(removed, 1);
+        assert_eq!(store.clips.len(), 1);
+        assert_eq!(store.clips[0].text.as_deref(), Some("keep me"));
+        assert!(!image_path.exists());
     }
 
     #[test]

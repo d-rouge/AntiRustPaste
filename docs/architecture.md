@@ -138,7 +138,7 @@ draw Images row
       ├── ignored source app? stop
       ├── Store::insert (hash dedup, move to top, write blob)
       ├── trim to the configured limit
-      └── save, rebuild the recent menu, redraw the list
+      └── save and redraw the list
 ```
 
 Polling is intentionally simple. `changeCount` is the only change signal; there
@@ -171,7 +171,9 @@ and full-screen-auxiliary behaviour. Its content is an `NSVisualEffectView`
 `RCClipListView::drawRect:`; only the visible range is painted. A segmented
 control switches between **Text** and **Images**; ⌘1/⌘2 do the same. The search
 field is the first responder, and a local key monitor handles arrows, Enter,
-Escape, Delete, ⌘1/⌘2 and ⌘C before AppKit's responder chain. Presentation is
+Escape, Delete, ⌘1/⌘2 and ⌘C before AppKit's responder chain. The footer holds
+**Clear Text** and **Clear Images** buttons; each calls
+`Store::remove_where` for its section and then prunes thumbnails. Presentation is
 deferred by one 50 ms timer after a status-item click: making the panel key
 inside the mouse event lets the status bar take key back and immediately fires
 `windowDidResignKey`.

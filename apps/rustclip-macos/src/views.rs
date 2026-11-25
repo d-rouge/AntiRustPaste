@@ -529,6 +529,8 @@ pub(crate) struct PanelParts {
     pub list: Retained<ClipListView>,
     pub footer: Retained<NSTextField>,
     pub section_control: Retained<NSSegmentedControl>,
+    pub clear_text_button: Retained<NSButton>,
+    pub clear_images_button: Retained<NSButton>,
 }
 
 pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) -> PanelParts {
@@ -604,18 +606,59 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
     let footer = NSTextField::labelWithString(&NSString::from_str("0 clippings"), mtm);
     footer.setFrame(NSRect::new(
         NSPoint::new(14.0, 8.0),
-        NSSize::new(PANEL_W - 28.0, 16.0),
+        NSSize::new(210.0, 16.0),
     ));
     footer.setFont(Some(&NSFont::systemFontOfSize(10.0)));
     footer.setTextColor(Some(&NSColor::secondaryLabelColor()));
     bg.addSubview(&footer);
 
+    let clear_text_button = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str("Clear Text"),
+            Some(as_any(delegate)),
+            Some(sel!(clearTextSection:)),
+            mtm,
+        )
+    };
+    clear_text_button.setFrame(NSRect::new(
+        NSPoint::new(232.0, 2.0),
+        NSSize::new(96.0, 24.0),
+    ));
+    clear_text_button.setBezelStyle(NSBezelStyle::Automatic);
+    clear_text_button.setControlSize(NSControlSize::Small);
+    clear_text_button.setFont(Some(&NSFont::systemFontOfSize(10.0)));
+    clear_text_button.setToolTip(Some(&NSString::from_str(
+        "Delete all text, rich text, HTML and file clippings",
+    )));
+    bg.addSubview(&clear_text_button);
+
+    let clear_images_button = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str("Clear Images"),
+            Some(as_any(delegate)),
+            Some(sel!(clearImagesSection:)),
+            mtm,
+        )
+    };
+    clear_images_button.setFrame(NSRect::new(
+        NSPoint::new(334.0, 2.0),
+        NSSize::new(112.0, 24.0),
+    ));
+    clear_images_button.setBezelStyle(NSBezelStyle::Automatic);
+    clear_images_button.setControlSize(NSControlSize::Small);
+    clear_images_button.setFont(Some(&NSFont::systemFontOfSize(10.0)));
+    clear_images_button.setToolTip(Some(&NSString::from_str(
+        "Delete all copied images and their thumbnails",
+    )));
+    bg.addSubview(&clear_images_button);
     PanelParts {
         panel,
         search,
         list,
         footer,
         section_control,
+        clear_text_button,
+        clear_images_button,
     }
 }
 

@@ -21,7 +21,9 @@ are called through small FFI shims.
 - Popup with live search, keyboard navigation, ⏎ to paste, ⌫ to delete, esc to
   close. Choosing a clipping writes it to the pasteboard, reactivates the
   previous app and synthesises ⌘V.
-- Status menu with recent clippings, preferences, clear history.
+- Status menu with Preferences, Clear All Clippings (history + thumbnails), About and Quit.
+- Footer buttons that clear only the **Text** section or only the **Images**
+  section, with the same delete confirmation.
 - Preferences: history limit, record toggle, confirm-before-delete, start at
   login, global shortcut, and an ignored-apps list.
 - History limit from 1 to 9999 clippings (200 by default).

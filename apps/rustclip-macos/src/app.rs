@@ -919,6 +919,7 @@ fn present_panel() {
 
 pub(crate) fn handle_list_click(view: &ClipListView, event: &NSEvent) {
     let point = view.convertPoint_fromView(event.locationInWindow(), None);
+    let width = view.bounds().size.width;
     let (scroll, count) = with_state(|s| (s.scroll, filtered_indices(s).len()));
     if count == 0 {
         return;
@@ -928,8 +929,13 @@ pub(crate) fn handle_list_click(view: &ClipListView, event: &NSEvent) {
         return;
     }
     let row = row.floor() as usize;
-    if row < count {
-        with_state(|s| s.selected = row);
+    if row >= count {
+        return;
+    }
+    with_state(|s| s.selected = row);
+    if point.x >= width - 36.0 {
+        toggle_pin_at(row);
+    } else {
         paste_filtered(row, true);
     }
 }
@@ -972,8 +978,13 @@ fn paste_selected() {
 }
 
 fn toggle_pin_selected() {
+    let selected = with_state(|s| s.selected);
+    toggle_pin_at(selected);
+}
+
+fn toggle_pin_at(filtered_index: usize) {
     let snapshot = with_state(|s| {
-        let store_index = *filtered_indices(s).get(s.selected)?;
+        let store_index = *filtered_indices(s).get(filtered_index)?;
         let clip = s.store.clips.get(store_index)?;
         Some((store_index, clip.pinned))
     });

@@ -91,7 +91,7 @@ when they point at an image.
 | Delete / Forward Delete | Delete the selection when the search field is empty or ⌘ is held |
 | Escape | Close the popup |
 | ⌘1 / ⌘2 | Switch to the Text / Images tab |
-| ⌘P | Pin or unpin the selected clipping |
+| ⌘P | Pin or unpin the selected clipping (the row pin icon does the same) |
 | Tab / typing | Goes to the search field; the list does not steal text input |
 
 The key monitor runs before the responder chain and only acts while the popup is

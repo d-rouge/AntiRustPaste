@@ -20,8 +20,8 @@ removed only by an explicit delete or clear action.
 
 ### Behaviour to implement
 
-- Pin and unpin with `⌘P`; show a clear pin indicator on pinned rows. A row
-  context menu is a follow-up.
+- Pin and unpin with the clickable pin icon at the right of each row or `⌘P`;
+  show a clear pin indicator on pinned rows. A row context menu is a follow-up.
 - Pinned clips appear in a pinned group before unpinned clips in both the Text
   and Images sections. Within each group, newest first.
 - `Store::trim` never removes a pinned clip. The configured maximum applies to

@@ -90,7 +90,7 @@ RUSTCLIP_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
 | 22a | **Clear Text** with text + image clips | Text/HTML/RTF/file clips removed; images remain; button follows confirmation setting |
 | 22b | **Clear Images** with text + image clips | Images and thumbnails removed; text/file clips remain; button follows confirmation setting |
 | 22c | Clear buttons with an empty section | Buttons are disabled; no alert or beep |
-| 22d | Pin a row with ⌘P | Pin glyph appears, row moves to the pinned group and survives repeated copies/trim |
+| 22d | Pin a row with its right-side pin icon or ⌘P | Pin glyph fills, row moves to the pinned group and survives repeated copies/trim |
 | 22e | Unpin a row | Row leaves the pinned group; explicit delete still removes it |
 | 23 | Multi-monitor / full-screen app | Popup appears on the status item's screen and above full-screen spaces |
 | 24 | Quit and relaunch | History and preferences persist; thumbnails regenerate if the temp cache was purged |

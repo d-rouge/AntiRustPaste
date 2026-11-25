@@ -306,10 +306,9 @@ fn draw_list(view: &ClipListView) {
                 path.fill();
             }
 
-            let pin_space = if pinned { 24.0 } else { 0.0 };
             let title_rect = NSRect::new(
                 NSPoint::new(text_left, y + 10.0),
-                NSSize::new(width - text_left - 16.0 - pin_space, 18.0),
+                NSSize::new(width - text_left - 44.0, 18.0),
             );
             let title_color = if is_selected { &white } else { &label_color };
             draw_text(
@@ -320,19 +319,22 @@ fn draw_list(view: &ClipListView) {
                 NSTextAlignment::Left,
             );
 
-            if pinned {
-                draw_text(
-                    "📌",
-                    NSRect::new(NSPoint::new(width - 32.0, y + 9.0), NSSize::new(22.0, 16.0)),
-                    &NSFont::systemFontOfSize(11.0),
-                    if is_selected { &white } else { &secondary },
-                    NSTextAlignment::Center,
-                );
-            }
+            let pin_rect = NSRect::new(
+                NSPoint::new(width - 30.0, y + 19.0),
+                NSSize::new(14.0, 16.0),
+            );
+            let pin_color = if is_selected {
+                white.colorWithAlphaComponent(if pinned { 1.0 } else { 0.65 })
+            } else if pinned {
+                label_color.clone()
+            } else {
+                secondary.colorWithAlphaComponent(0.72)
+            };
+            draw_pin(pin_rect, pinned, &pin_color);
 
             let subtitle_rect = NSRect::new(
                 NSPoint::new(text_left, y + 30.0),
-                NSSize::new(width - text_left - 16.0, 15.0),
+                NSSize::new(width - text_left - 44.0, 15.0),
             );
             let subtitle_color = if is_selected {
                 white.colorWithAlphaComponent(0.85)
@@ -358,6 +360,30 @@ fn draw_list(view: &ClipListView) {
             }
         }
     });
+}
+
+fn draw_pin(rect: NSRect, filled: bool, color: &NSColor) {
+    let head = NSBezierPath::bezierPathWithOvalInRect(NSRect::new(
+        NSPoint::new(rect.origin.x + 2.0, rect.origin.y + 1.0),
+        NSSize::new(10.0, 8.0),
+    ));
+    let body = NSBezierPath::new();
+    body.moveToPoint(NSPoint::new(rect.origin.x + 1.0, rect.origin.y + 9.0));
+    body.lineToPoint(NSPoint::new(rect.origin.x + 13.0, rect.origin.y + 9.0));
+    body.lineToPoint(NSPoint::new(rect.origin.x + 7.0, rect.origin.y + 16.0));
+    body.closePath();
+
+    if filled {
+        color.setFill();
+        head.fill();
+        body.fill();
+    } else {
+        color.setStroke();
+        head.setLineWidth(1.0);
+        head.stroke();
+        body.setLineWidth(1.0);
+        body.stroke();
+    }
 }
 
 fn image_title(clip: &Clip) -> String {

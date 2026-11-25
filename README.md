@@ -27,10 +27,11 @@ are called through small FFI shims.
   (history + thumbnails), About and Quit.
 - Footer buttons that clear only the **Text** section or only the **Images**
   section, with the same delete confirmation.
-- **Export images to PDF**: pick images in a dedicated window (Images-tab
-  **PDF…** button, status menu or `⌘E`) and save one A4 page per image with the
-  system save dialog. Original blobs are embedded, not thumbnails; large images
-  are scaled to fit the page and small ones keep their native size.
+- **Export images to PDF**: pick and drag-reorder images in a dedicated window
+  (Images-tab **PDF…** button, status menu or `⌘E`) and save one A4 page per
+  image with the system save dialog. Original blobs are embedded, not
+  thumbnails; large images are scaled to fit the page and small ones keep their
+  native size.
 - Preferences: history limit, record toggle, confirm-before-delete, start at
   login, global shortcut, and an ignored-apps list.
 - History limit from 1 to 9999 clippings (200 by default).

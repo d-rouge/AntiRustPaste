@@ -31,7 +31,7 @@ Current unit tests cover:
 | `rustclip` (macOS) | `settings` | Legacy NSEvent modifier migration |
 | `rustclip` (macOS) | `hotkey` | Shortcut formatting, Carbon modifier mapping |
 | `rustclip` (macOS) | `thumbnails` | Unsafe cache roots, filesystem-safe user key |
-| `rustclip` (macOS) | `app` | PDF destination is replaced atomically; a missing directory is reported without leaving a file |
+| `rustclip` (macOS) | `app` | PDF destination is replaced atomically; a missing directory is reported without leaving a file; drag moves shift rows in both directions; order keeps drags and appends new images |
 
 Tests that touch the filesystem use `std::env::temp_dir()` plus a UUID and remove
 their directory. They never call AppKit or touch the pasteboard. The PDF tests
@@ -101,7 +101,9 @@ RUSTCLIP_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
 | 24 | Quit and relaunch | History and preferences persist; thumbnails regenerate if the temp cache was purged |
 | 25 | Images tab, one or more images, click **PDF…** | Export window lists every image selected; status reads `N of N images selected` |
 | 26 | Click a row, then Select All/Select None | Selection and status follow; **Save PDF…** is disabled with nothing selected |
-| 27 | Save PDF… into a scratch folder and open the file in Preview | One A4 page per image in list order, centred with white margins, original resolution, right way up |
+| 26a | Drag a row above and below its neighbours | The drop line follows the pointer; on release the rows shift and the PDF page order matches the list |
+| 26b | Press a row and move less than 3 pt | Treated as a click: the checkbox toggles, no reorder |
+| 27 | Save PDF… into a scratch folder after reordering and open the file in Preview | One A4 page per image in the dragged order, centred with white margins, original resolution, right way up |
 | 28 | Cancel the save dialog, then close the export window | No file is written and the window closes; the app stays usable |
 | 29 | Remove a selected blob behind the app, then save | Alert reports the problem, no partial PDF, export window stays open |
 

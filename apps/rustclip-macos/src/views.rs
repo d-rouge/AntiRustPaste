@@ -477,12 +477,20 @@ fn draw_image_fit(rect: NSRect, image: &NSImage) {
 // ---------------------------------------------------------------------------
 
 pub(crate) const PDF_ROW_H: f64 = 64.0;
+const NO_DRAG_ROW: usize = usize::MAX;
+
+pub(crate) struct PdfSelectionIvars {
+    drag_from: Cell<usize>,
+    drag_boundary: Cell<usize>,
+    press_y: Cell<f64>,
+    dragging: Cell<bool>,
+}
 
 define_class!(
     #[unsafe(super(NSView))]
     #[thread_kind = MainThreadOnly]
     #[name = "RCPdfSelectionView"]
-    #[ivars = ()]
+    #[ivars = PdfSelectionIvars]
     pub(crate) struct PdfSelectionView;
 
     unsafe impl NSObjectProtocol for PdfSelectionView {}
@@ -505,8 +513,56 @@ define_class!(
 
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
-            guard("pdf_selection_click", || {
-                app::pdf_toggle_from_click(self, event);
+            guard("pdf_selection_mouse_down", || {
+                let point = self.convertPoint_fromView(event.locationInWindow(), None);
+                self.ivars().press_y.set(point.y);
+                self.ivars().drag_from.set(pdf_row_at(point.y));
+                self.ivars().drag_boundary.set(0);
+                self.ivars().dragging.set(false);
+            });
+        }
+
+        #[unsafe(method(mouseDragged:))]
+        fn mouse_dragged(&self, event: &NSEvent) {
+            guard("pdf_selection_mouse_dragged", || {
+                let from = self.ivars().drag_from.get();
+                if from == NO_DRAG_ROW {
+                    return;
+                }
+                let point = self.convertPoint_fromView(event.locationInWindow(), None);
+                if !self.ivars().dragging.get() {
+                    if (point.y - self.ivars().press_y.get()).abs() < 3.0 {
+                        return;
+                    }
+                    self.ivars().dragging.set(true);
+                }
+                let boundary = pdf_boundary_at(point.y).min(app::pdf_row_count());
+                self.ivars().drag_boundary.set(boundary);
+                self.scrollRectToVisible(NSRect::new(
+                    NSPoint::new(0.0, point.y),
+                    NSSize::new(1.0, 1.0),
+                ));
+                self.setNeedsDisplay(true);
+            });
+        }
+
+        #[unsafe(method(mouseUp:))]
+        fn mouse_up(&self, _event: &NSEvent) {
+            guard("pdf_selection_mouse_up", || {
+                let from = self.ivars().drag_from.get();
+                let dragging = self.ivars().dragging.get();
+                let boundary = self.ivars().drag_boundary.get();
+                self.ivars().drag_from.set(NO_DRAG_ROW);
+                self.ivars().dragging.set(false);
+                self.setNeedsDisplay(true);
+                if from == NO_DRAG_ROW {
+                    return;
+                }
+                if dragging {
+                    app::pdf_move_row(from, boundary);
+                } else {
+                    app::pdf_toggle_row(from);
+                }
             });
         }
     }
@@ -514,9 +570,28 @@ define_class!(
 
 impl PdfSelectionView {
     pub(crate) fn create(mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(());
-        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(500.0, 1.0));
+        let this = Self::alloc(mtm).set_ivars(PdfSelectionIvars {
+            drag_from: Cell::new(NO_DRAG_ROW),
+            drag_boundary: Cell::new(0),
+            press_y: Cell::new(0.0),
+            dragging: Cell::new(false),
+        });
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(528.0, 1.0));
         unsafe { msg_send![super(this), initWithFrame: frame] }
+    }
+}
+
+fn pdf_row_at(y: f64) -> usize {
+    let row = (y / PDF_ROW_H).floor();
+    if row < 0.0 { NO_DRAG_ROW } else { row as usize }
+}
+
+fn pdf_boundary_at(y: f64) -> usize {
+    let boundary = (y / PDF_ROW_H).round();
+    if boundary <= 0.0 {
+        0
+    } else {
+        boundary as usize
     }
 }
 
@@ -525,24 +600,24 @@ fn draw_pdf_selection(view: &PdfSelectionView) {
     let width = bounds.size.width;
     let height = bounds.size.height;
     let rows = with_state(|s: &mut AppState| {
-        let selected = s
-            .pdf_export
-            .as_ref()
-            .map(|pdf| pdf.selected.clone())
-            .unwrap_or_default();
-        s.store
-            .clips
+        let Some(pdf) = &s.pdf_export else {
+            return Vec::new();
+        };
+        pdf.order
             .iter()
-            .filter(|clip| clip.kind == ClipKind::Image)
-            .map(|clip| {
-                (
-                    clip.id.clone(),
+            .filter_map(|id| {
+                let clip = s
+                    .store
+                    .clips
+                    .iter()
+                    .find(|clip| clip.id == *id && clip.kind == ClipKind::Image)?;
+                Some((
                     clip.hash,
                     clip.blob.clone(),
                     image_title(clip),
                     clip.subtitle(),
-                    selected.contains(&clip.id),
-                )
+                    pdf.selected.contains(&clip.id),
+                ))
             })
             .collect::<Vec<_>>()
     });
@@ -561,6 +636,10 @@ fn draw_pdf_selection(view: &PdfSelectionView) {
         return;
     }
 
+    let dragging = view.ivars().dragging.get();
+    let drag_from = view.ivars().drag_from.get();
+    let drag_boundary = view.ivars().drag_boundary.get();
+
     let title_font = NSFont::systemFontOfSize(13.0);
     let subtitle_font = NSFont::systemFontOfSize(11.0);
     let label = NSColor::labelColor();
@@ -570,12 +649,14 @@ fn draw_pdf_selection(view: &PdfSelectionView) {
     let white = NSColor::whiteColor();
 
     with_state(|s: &mut AppState| {
-        for (index, (id, hash, blob, title, subtitle, selected)) in rows.iter().enumerate() {
-            let _ = id;
+        for (index, (hash, blob, title, subtitle, selected)) in rows.iter().enumerate() {
             let y = index as f64 * PDF_ROW_H;
             let row_rect = NSRect::new(NSPoint::new(0.0, y), NSSize::new(width, PDF_ROW_H));
             if *selected {
                 fill_rounded(row_rect, 0.0, &accent.colorWithAlphaComponent(0.08));
+            }
+            if dragging && index == drag_from {
+                fill_rounded(row_rect, 0.0, &accent.colorWithAlphaComponent(0.16));
             }
 
             let checkbox = NSRect::new(NSPoint::new(14.0, y + 24.0), NSSize::new(16.0, 16.0));
@@ -658,6 +739,17 @@ fn draw_pdf_selection(view: &PdfSelectionView) {
                     &border.colorWithAlphaComponent(0.5),
                 );
             }
+        }
+
+        if dragging {
+            let line_y = (drag_boundary as f64 * PDF_ROW_H).clamp(1.0, height - 1.0);
+            fill_rect(
+                NSRect::new(
+                    NSPoint::new(8.0, line_y - 1.0),
+                    NSSize::new(width - 16.0, 2.0),
+                ),
+                &accent,
+            );
         }
     });
 }

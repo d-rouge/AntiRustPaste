@@ -78,8 +78,8 @@ removed only by an explicit delete or clear action.
 - Entry points: the **PDF…** footer button on the Images tab, **Export Images to
   PDF…** in the status menu, and `⌘E` while the popup is open.
 - A dedicated export window lists image clips in history order with checkboxes,
-  **Select All** (⌘A), **Select None** (⌘D), **Save PDF…** (⌘S) and
-  **Cancel**/esc.
+  drag reordering (the list order is the page order), **Select All** (⌘A),
+  **Select None** (⌘D), **Save PDF…** (⌘S) and **Cancel**/esc.
 - The system save dialog (`NSSavePanel`) writes the file; the default name is
   `Clipboard Images.pdf`.
 - `crates/rustclip-pdf` is a pure-Rust, `#![forbid(unsafe_code)]` writer: one A4
@@ -94,7 +94,6 @@ removed only by an explicit delete or clear action.
 
 ### Remaining
 
-- [ ] Drag or button reordering of the selected images.
 - [ ] Page size (A4/Letter), orientation and margin options.
 - [ ] Progress indicator and off-main-thread encoding (a second worker thread
       needs the operator's approval).
@@ -105,8 +104,9 @@ removed only by an explicit delete or clear action.
 
 ### Acceptance checks
 
-- [x] Select images and save a PDF; pages follow list order and the file opens
-      in Preview (verified by rendering a generated file with PDFKit).
+- [x] Select images, drag them into order and save a PDF; pages follow the
+      list order and the file opens in Preview (verified by rendering a
+      generated file with PDFKit).
 - [x] Images are embedded from the original blobs, not the 128 px thumbnails.
 - [x] Cancelling the save dialog leaves no file.
 - [x] A missing or unreadable blob aborts with a clear message and no file.

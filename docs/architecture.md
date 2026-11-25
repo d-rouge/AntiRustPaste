@@ -247,6 +247,7 @@ PDF… / status menu / ⌘E
        └── makeKeyAndOrderFront
 PDF window
   ├── row click            -> toggle id in PdfExportState.selected
+  ├── row drag (>= 3 pt)   -> reorder PdfExportState.order, accent drop line
   ├── Select All/None      -> replace the set
   ├── Save PDF… (⌘S)       -> NSSavePanel::runModal
   │     └── app::save_pdf
@@ -256,14 +257,20 @@ PDF window
   └── Cancel / esc / close -> close_pdf_export (orders the window out)
 ```
 
-- Selection is stored by clip id, so new captures cannot change what is
-  selected; ids that disappear are ignored.
+- Both order and selection are stored by clip id, so new captures cannot
+  disturb them. `pdf_sync_order` keeps the dragged order, appends new images
+  unselected and drops ids that left the history; `moved_order` performs the
+  drag move without indexing past the vector.
+- `RCPdfSelectionView` tracks the pressed row, the 3 pt drag threshold and the
+  insertion boundary in `Cell`s. `mouseDragged:` updates the drop line and keeps
+  the pointer row visible; `mouseUp:` either reorders or toggles.
 - `PdfExportParts` retains the window and its controls. The window has no
   delegate: closing it only orders it out, and the next export replaces the
   stored parts. Dropping the window from inside its own close callback would be
   unsafe, so the state is not torn down there.
 - The writer emits the catalogue, page tree, one page and content stream per
-  image and one `/DeviceRGB` image XObject compressed with Flate. Rows are
+  image and one `/DeviceRGB` image XObject compressed with Flate. Pages follow
+  `PdfExportState.order`. Rows are
   negated in height because image samples start at the top while PDF user space
   grows upwards. Placement scales an image down only when it exceeds the
   printable area; smaller images keep 1 px = 1 pt.

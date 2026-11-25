@@ -72,7 +72,7 @@ They depend on core; core never depends on a shell.
 | Thumbnail image loading | ✅ `NSImage` | ⬜ decoder → texture/bitmap | ⬜ decoder → texture/bitmap |
 | Thumbnail cache path | ✅ `/tmp/...` (boot-cleared) | ⬜ `%TEMP%\RustClip` | ⬜ `$XDG_CACHE_HOME`/tmp |
 | Image export to PDF | ✅ `rustclip-pdf` + `NSSavePanel` | ⬜ shell save dialog | ⬜ shell save dialog |
-| Tests | ✅ 7 shell + 21 core + 12 imaging + 5 PDF | ⬜ | ⬜ |
+| Tests | ✅ 9 shell + 21 core + 12 imaging + 6 PDF | ⬜ | ⬜ |
 
 Legend: ✅ done, ⬜ not implemented.
 
@@ -96,7 +96,7 @@ Files: `apps/rustclip-macos/src/`.
 
 Known macOS gaps: no per-row accessibility elements in the hand-drawn list, no
 image grid, EXIF orientation is not applied, no encryption at rest, PDF export
-has no reordering, page options or progress indicator.
+has no page options or progress indicator.
 
 ## Clipboard backend candidates
 

@@ -134,22 +134,27 @@ The export window lists every image clip in history order (pinned first, newest
 first). Every image starts selected.
 
 - Clicking a row or its checkbox includes or excludes that image.
+- Dragging a row up or down changes the page order; an accent line marks where
+  it will land. A press that moves less than 3 pt counts as a click, so dragging
+  never toggles the checkbox. The list scrolls when a drag reaches an edge.
+- Row order is the PDF page order. It lives only in the open window and resets
+  to history order the next time the window opens.
 - **Select All** (⌘A) and **Select None** (⌘D) change the whole selection.
 - The status line reads `N of M images selected`; **Save PDF…** (⌘S) is disabled
   when nothing is selected.
 - **Cancel**, esc or the title-bar close button close the window without saving.
-- Images captured while the window is open appear at their history position and
-  start unselected.
+- Images captured while the window is open are appended after the next list
+  refresh (a click, drag or selection change) and start unselected.
 
 **Save PDF…** opens the system save dialog with the default name
 `Clipboard Images.pdf`; a missing `.pdf` extension is added. After a destination
 is chosen the app:
 
 1. reads the original blobs (not thumbnails) for the selected images;
-2. builds one A4 page per image in list order, centring each image with a 12 mm
-   margin and preserving its aspect ratio; an image larger than the printable
-   area is scaled down to fit, a smaller one keeps its native size (1 pixel =
-   1 point);
+2. builds one A4 page per image in the order shown in the window, centring each
+   image with a 12 mm margin and preserving its aspect ratio; an image larger
+   than the printable area is scaled down to fit, a smaller one keeps its
+   native size (1 pixel = 1 point);
 3. decodes each image to 8-bit RGB, compositing transparency onto white, and
    compresses the samples with Flate;
 4. writes the complete PDF to a temporary file next to the destination and
@@ -159,10 +164,10 @@ Cancelling the save dialog writes nothing. A missing or unreadable blob aborts
 the export with an alert and no file; a write or rename failure is reported the
 same way. The export never changes history, pins, settings or thumbnails.
 
-Limitations in this version: no reordering, no page-size/orientation options, no
-progress indicator (encoding runs on the main thread after the dialog closes),
-and EXIF orientation is not applied. Large selections pause the popup until the
-file is written.
+Limitations in this version: no page-size/orientation options, no progress
+indicator (encoding runs on the main thread after the dialog closes), and EXIF
+orientation is not applied. Large selections pause the popup until the file is
+written.
 
 ## 9. Preferences
 

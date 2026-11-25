@@ -85,6 +85,7 @@ impl SectionUi for Section {
 
 pub(crate) struct PdfExportState {
     pub parts: PdfExportParts,
+    pub order: Vec<String>,
     pub selected: HashSet<String>,
 }
 
@@ -1740,12 +1741,17 @@ fn pdf_image_ids(s: &AppState) -> Vec<String> {
 
 fn pdf_refresh() {
     with_state(|s| {
-        let Some(pdf) = &s.pdf_export else {
+        let available = pdf_image_ids(s);
+        let Some(pdf) = &mut s.pdf_export else {
             return;
         };
-        let ids = pdf_image_ids(s);
-        let selected = ids.iter().filter(|id| pdf.selected.contains(*id)).count();
-        let total = ids.len();
+        pdf_sync_order(&mut pdf.order, &available);
+        let total = pdf.order.len();
+        let selected = pdf
+            .order
+            .iter()
+            .filter(|id| pdf.selected.contains(*id))
+            .count();
         let status = format!("{selected} of {total} images selected");
         pdf.parts
             .status
@@ -1789,9 +1795,17 @@ fn open_pdf_export() {
         );
         return;
     };
-    let selected = with_state(|s| pdf_image_ids(s).into_iter().collect());
+    let (order, selected) = with_state(|s| {
+        let order = pdf_image_ids(s);
+        let selected = order.iter().cloned().collect();
+        (order, selected)
+    });
     with_state(|s| {
-        s.pdf_export = Some(PdfExportState { parts, selected });
+        s.pdf_export = Some(PdfExportState {
+            parts,
+            order,
+            selected,
+        });
     });
 
     pdf_refresh();
@@ -1802,19 +1816,19 @@ fn open_pdf_export() {
     }
 }
 
-pub(crate) fn pdf_toggle_from_click(view: &views::PdfSelectionView, event: &NSEvent) {
-    let point = view.convertPoint_fromView(event.locationInWindow(), None);
-    let row = (point.y / views::PDF_ROW_H).floor();
-    if row < 0.0 {
-        return;
-    }
+pub(crate) fn pdf_row_count() -> usize {
+    with_state(|s| {
+        s.pdf_export
+            .as_ref()
+            .map(|pdf| pdf.order.len())
+            .unwrap_or(0)
+    })
+}
+
+pub(crate) fn pdf_toggle_row(row: usize) {
     let id = with_state(|s| {
-        s.store
-            .clips
-            .iter()
-            .filter(|clip| clip.kind == ClipKind::Image)
-            .nth(row as usize)
-            .map(|clip| clip.id.clone())
+        let pdf = s.pdf_export.as_ref()?;
+        pdf.order.get(row).cloned()
     });
     let Some(id) = id else {
         return;
@@ -1829,6 +1843,73 @@ pub(crate) fn pdf_toggle_from_click(view: &views::PdfSelectionView, event: &NSEv
         }
     });
     pdf_refresh();
+}
+
+pub(crate) fn pdf_move_row(from: usize, boundary: usize) {
+    with_state(|s| {
+        let Some(pdf) = &mut s.pdf_export else {
+            return;
+        };
+        let count = pdf.order.len();
+        if from >= count {
+            return;
+        }
+        let mut destination = boundary.min(count);
+        if destination > from {
+            destination -= 1;
+        }
+        if let Some(order) = moved_order(&pdf.order, from, destination) {
+            pdf.order = order;
+        }
+    });
+    pdf_refresh();
+}
+
+/// Move `from` to `to`, shifting the rows in between. Returns `None` for an
+/// out-of-range request and a copy for a no-op move.
+fn moved_order(order: &[String], from: usize, to: usize) -> Option<Vec<String>> {
+    let moved = order.get(from)?.clone();
+    if to >= order.len() {
+        return None;
+    }
+    if from == to {
+        return Some(order.to_vec());
+    }
+
+    let mut result = Vec::with_capacity(order.len());
+    for (index, item) in order.iter().enumerate() {
+        if index == from {
+            continue;
+        }
+        if result.len() == to {
+            result.push(moved.clone());
+        }
+        result.push(item.clone());
+    }
+    if result.len() < order.len() {
+        result.push(moved);
+    }
+    Some(result)
+}
+
+/// Keep the operator's drag order and append images captured since the window
+/// opened. Ids removed from history are dropped.
+fn pdf_sync_order(order: &mut Vec<String>, available: &[String]) -> bool {
+    let mut changed = false;
+    order.retain(|id| {
+        let keep = available.iter().any(|candidate| candidate == id);
+        if !keep {
+            changed = true;
+        }
+        keep
+    });
+    for id in available {
+        if !order.iter().any(|candidate| candidate == id) {
+            order.push(id.clone());
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn pdf_select(selected: bool) {
@@ -1895,15 +1976,17 @@ fn save_pdf() {
         };
         let mut images = Vec::new();
         let mut missing = false;
-        for clip in s
-            .store
-            .clips
-            .iter()
-            .filter(|clip| clip.kind == ClipKind::Image && pdf.selected.contains(&clip.id))
-        {
+        for id in &pdf.order {
+            if !pdf.selected.contains(id) {
+                continue;
+            }
+            let clip = s
+                .store
+                .clips
+                .iter()
+                .find(|clip| clip.id == *id && clip.kind == ClipKind::Image);
             match clip
-                .blob
-                .as_deref()
+                .and_then(|clip| clip.blob.as_deref())
                 .and_then(|blob| s.store.read_blob(blob))
             {
                 Some(bytes) => images.push(PdfImage { bytes }),
@@ -2008,6 +2091,30 @@ mod tests {
         assert!(!dir.join("out.pdf.tmp").exists());
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn ids(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn moved_order_shifts_rows_in_both_directions() {
+        let order = ids(&["a", "b", "c", "d"]);
+        assert_eq!(moved_order(&order, 0, 2), Some(ids(&["b", "c", "a", "d"])));
+        assert_eq!(moved_order(&order, 3, 1), Some(ids(&["a", "d", "b", "c"])));
+        assert_eq!(moved_order(&order, 2, 2), Some(order.clone()));
+        assert_eq!(moved_order(&order, 4, 0), None);
+        assert_eq!(moved_order(&order, 0, 4), None);
+    }
+
+    #[test]
+    fn pdf_order_keeps_dragged_order_and_appends_new_images() {
+        let mut order = ids(&["b", "a"]);
+        assert!(pdf_sync_order(&mut order, &ids(&["a", "b", "c"])));
+        assert_eq!(order, ids(&["b", "a", "c"]));
+        assert!(!pdf_sync_order(&mut order, &ids(&["a", "b", "c"])));
+        assert!(pdf_sync_order(&mut order, &ids(&["b", "c"])));
+        assert_eq!(order, ids(&["b", "c"]));
     }
 
     #[test]

@@ -8,9 +8,12 @@
   artwork on a rounded off-white tile with a thin border, white background
   removed.
 - `app-icon/AppIcon.icns` — macOS bundle icon generated from the master.
-- `status-icon.png` — a 36 px monochrome template derived from the same source,
-  used for the menu bar. It keeps only the can silhouette; the shield emblem and
-  label are dropped so the icon stays legible at menu-bar size.
+- `app-icon/status-source.png` — the monochrome version of the spray can supplied
+  with the colour artwork on 2026-11-25. It is the source for the menu-bar icon.
+- `status-icon.png` — a 36 px monochrome template derived from
+  `app-icon/status-source.png`, used for the menu bar. White areas become
+  transparent, so the shield, hammer and label cut out and the can keeps the same
+  emblem as the source artwork.
 
 - `dmg/background.png` and `dmg/background@2x.png` — the neutral background with
   a dashed arrow used by the disk image window. Drawn in-house with CoreGraphics

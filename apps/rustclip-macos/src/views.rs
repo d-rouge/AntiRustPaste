@@ -323,14 +323,29 @@ fn draw_list(view: &ClipListView) {
                 NSPoint::new(width - 30.0, y + 19.0),
                 NSSize::new(14.0, 16.0),
             );
-            let pin_color = if is_selected {
-                white.colorWithAlphaComponent(if pinned { 1.0 } else { 0.65 })
+            let pin_image = if is_selected {
+                if pinned {
+                    s.pin_filled_selected.as_ref()
+                } else {
+                    s.pin_outline_selected.as_ref()
+                }
             } else if pinned {
-                label_color.clone()
+                s.pin_filled.as_ref()
             } else {
-                secondary.colorWithAlphaComponent(0.72)
+                s.pin_outline.as_ref()
             };
-            draw_pin(pin_rect, pinned, &pin_color);
+            if let Some(image) = pin_image {
+                draw_image_fit(pin_rect, image);
+            } else {
+                let pin_color = if is_selected {
+                    white.colorWithAlphaComponent(if pinned { 1.0 } else { 0.65 })
+                } else if pinned {
+                    label_color.clone()
+                } else {
+                    secondary.colorWithAlphaComponent(0.72)
+                };
+                draw_pin(pin_rect, pinned, &pin_color);
+            }
 
             let subtitle_rect = NSRect::new(
                 NSPoint::new(text_left, y + 30.0),
@@ -569,6 +584,10 @@ pub(crate) struct PanelParts {
     pub section_control: Retained<NSSegmentedControl>,
     pub clear_text_button: Retained<NSButton>,
     pub clear_images_button: Retained<NSButton>,
+    pub pin_outline: Option<Retained<NSImage>>,
+    pub pin_filled: Option<Retained<NSImage>>,
+    pub pin_outline_selected: Option<Retained<NSImage>>,
+    pub pin_filled_selected: Option<Retained<NSImage>>,
 }
 
 pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) -> PanelParts {
@@ -689,6 +708,15 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
         "Delete all copied images and their thumbnails",
     )));
     bg.addSubview(&clear_images_button);
+    let pin_outline = pin_symbol(
+        "pin",
+        &NSColor::secondaryLabelColor().colorWithAlphaComponent(0.8),
+    );
+    let pin_filled = pin_symbol("pin.fill", &NSColor::labelColor());
+    let pin_outline_selected =
+        pin_symbol("pin", &NSColor::whiteColor().colorWithAlphaComponent(0.8));
+    let pin_filled_selected = pin_symbol("pin.fill", &NSColor::whiteColor());
+
     PanelParts {
         panel,
         search,
@@ -697,7 +725,22 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
         section_control,
         clear_text_button,
         clear_images_button,
+        pin_outline,
+        pin_filled,
+        pin_outline_selected,
+        pin_filled_selected,
     }
+}
+
+fn pin_symbol(name: &str, color: &NSColor) -> Option<Retained<NSImage>> {
+    let base = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+        &NSString::from_str(name),
+        Some(&NSString::from_str("Pin clipping")),
+    )?;
+    let size = NSImageSymbolConfiguration::configurationWithPointSize_weight(13.0, 0.0);
+    let tint = NSImageSymbolConfiguration::configurationWithHierarchicalColor(color);
+    let config = size.configurationByApplyingConfiguration(&tint);
+    base.imageWithSymbolConfiguration(&config)
 }
 
 // ---------------------------------------------------------------------------

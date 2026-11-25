@@ -12,8 +12,8 @@ use objc2_foundation::*;
 use rustclip_core::{Clip, ClipKind, human_size};
 
 use crate::app::{
-    self, AppState, ClipboardSection, LIST_BOTTOM, PANEL_H, PANEL_W, ROW_H, SEARCH_H, SectionUi,
-    as_any, filtered_indices, guard, with_state,
+    self, AppState, ClipboardSection, LIST_BOTTOM, LIST_HEADER_H, ListLayout, PANEL_H, PANEL_W,
+    ROW_H, SEARCH_H, SectionUi, as_any, filtered_indices, guard, list_layout, with_state,
 };
 
 // ---------------------------------------------------------------------------
@@ -196,13 +196,16 @@ fn draw_list(view: &ClipListView) {
     let width = bounds.size.width;
     let height = bounds.size.height;
 
-    let (indices, selected, scroll, query, section) = with_state(|s: &mut AppState| {
+    let (indices, selected, scroll, query, section, layout) = with_state(|s: &mut AppState| {
+        let indices = filtered_indices(s);
+        let layout = list_layout(s, &indices);
         (
-            filtered_indices(s),
+            indices,
             s.selected,
             s.scroll,
             s.query.clone(),
             s.section,
+            layout,
         )
     });
 
@@ -236,10 +239,11 @@ fn draw_list(view: &ClipListView) {
     let separator = NSColor::separatorColor().colorWithAlphaComponent(0.55);
     let placeholder = NSColor::separatorColor().colorWithAlphaComponent(0.35);
 
-    let start = (scroll / ROW_H).floor().max(0.0) as usize;
-    let end = (((scroll + height) / ROW_H).ceil() as usize + 1).min(indices.len());
+    let (start, end) = layout.visible_range(scroll, scroll + height);
 
     with_state(|s: &mut AppState| {
+        draw_list_grouping(width, height, scroll, &layout, &secondary);
+
         for visible in start..end {
             let Some(&clip_index) = indices.get(visible) else {
                 continue;
@@ -257,8 +261,9 @@ fn draw_list(view: &ClipListView) {
                     clip.pinned,
                 )
             };
-            let y = visible as f64 * ROW_H - scroll;
+            let y = layout.row_top(visible) - scroll;
             let is_selected = visible == selected;
+            let in_pinned_group = visible < layout.pinned();
 
             if is_selected {
                 fill_rounded(
@@ -344,7 +349,7 @@ fn draw_list(view: &ClipListView) {
                 let pin_color = if is_selected {
                     white.colorWithAlphaComponent(if pinned { 1.0 } else { 0.65 })
                 } else if pinned {
-                    label_color.clone()
+                    NSColor::controlAccentColor()
                 } else {
                     secondary.colorWithAlphaComponent(0.72)
                 };
@@ -368,7 +373,7 @@ fn draw_list(view: &ClipListView) {
                 NSTextAlignment::Left,
             );
 
-            if visible + 1 != indices.len() {
+            if !in_pinned_group && visible + 1 != indices.len() {
                 fill_rect(
                     NSRect::new(
                         NSPoint::new(text_left, y + ROW_H - 0.5),
@@ -379,6 +384,52 @@ fn draw_list(view: &ClipListView) {
             }
         }
     });
+}
+
+fn draw_list_grouping(
+    width: f64,
+    height: f64,
+    scroll: f64,
+    layout: &ListLayout,
+    secondary: &NSColor,
+) {
+    if let Some((top, card_height)) = layout.pinned_card() {
+        let card = NSRect::new(
+            NSPoint::new(4.0, top - scroll),
+            NSSize::new(width - 8.0, card_height),
+        );
+        let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(card, 10.0, 10.0);
+        NSColor::controlBackgroundColor()
+            .colorWithAlphaComponent(0.45)
+            .setFill();
+        path.fill();
+        NSColor::separatorColor()
+            .colorWithAlphaComponent(0.45)
+            .setStroke();
+        path.setLineWidth(1.0);
+        path.stroke();
+    }
+
+    let font = NSFont::systemFontOfSize(10.0);
+    if let Some(y) = layout.pinned_header_y() {
+        draw_group_header("PINNED", y - scroll, width, height, &font, secondary);
+    }
+    if let Some(y) = layout.recent_header_y() {
+        draw_group_header("RECENT", y - scroll, width, height, &font, secondary);
+    }
+}
+
+fn draw_group_header(text: &str, y: f64, width: f64, height: f64, font: &NSFont, color: &NSColor) {
+    if y + LIST_HEADER_H <= 0.0 || y >= height {
+        return;
+    }
+    draw_text(
+        text,
+        NSRect::new(NSPoint::new(18.0, y + 7.0), NSSize::new(width - 36.0, 13.0)),
+        font,
+        color,
+        NSTextAlignment::Left,
+    );
 }
 
 fn draw_image_fit_rotated(rect: NSRect, image: &NSImage, degrees: f64) {
@@ -1218,7 +1269,7 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
         "pin",
         &NSColor::secondaryLabelColor().colorWithAlphaComponent(0.8),
     );
-    let pin_filled = pin_symbol("pin.fill", &NSColor::labelColor());
+    let pin_filled = pin_symbol("pin.fill", &NSColor::controlAccentColor());
     let pin_outline_selected =
         pin_symbol("pin", &NSColor::whiteColor().colorWithAlphaComponent(0.8));
     let pin_filled_selected = pin_symbol("pin.fill", &NSColor::whiteColor());

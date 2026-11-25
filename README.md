@@ -18,7 +18,9 @@ are called through small FFI shims.
 - Re-copying something already in the history moves it to the top instead of
   duplicating it.
 - Pin clippings with the pin icon on each row (or `⌘P`) to keep them above the
-  list and exempt from automatic trimming until explicitly deleted.
+  list and exempt from automatic trimming until explicitly deleted. Pinned rows
+  are grouped under a **PINNED** header in their own card, separate from
+  **RECENT**.
 - Global shortcut (⇧⌘V by default, recordable in Preferences) opens the popup.
 - Popup with live search, keyboard navigation, ⏎ to paste, ⌫ to delete, esc to
   close. Choosing a clipping writes it to the pasteboard, reactivates the

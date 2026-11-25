@@ -181,7 +181,11 @@ footer holds **Clear Text** and **Clear Images** buttons; each calls
 `Store::remove_where` for its section and then prunes thumbnails. On the Images
 tab it also holds **PDF…**, which opens the export window, and the footer hint
 switches to `⌘E PDF`. `⌘P` toggles the pin of the selected row; pinned rows draw
-a tilting SF Symbol pin. Presentation is
+a tilting accent SF Symbol pin inside a rounded card under a **PINNED** header.
+`ListLayout` (in `app.rs`) owns the row geometry: header heights, group
+offsets, the pinned card, hit-testing and the visible range. Drawing, click
+mapping, scrolling and keyboard navigation all go through it, so headers are
+gaps rather than clickable rows. Presentation is
 deferred by one 50 ms timer after a status-item click: making the panel key
 inside the mouse event lets the status bar take key back and immediately fires
 `windowDidResignKey`.

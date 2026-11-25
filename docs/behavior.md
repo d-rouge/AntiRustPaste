@@ -60,7 +60,10 @@ The popup has two tabs, selected by a segmented control or ⌘1/⌘2:
   for a moment. A clip whose thumbnail cannot be generated keeps the placeholder.
 
 Both tabs are newest first, except pinned clips: they form a group at the top
-(first pinned row newest) and show a pin glyph. Empty tab:
+(first pinned row newest), separated from the rest of the list by a **PINNED**
+header and a rounded card, and show a filled accent pin. When both groups exist
+the unpinned rows follow a **RECENT** header; a header is omitted when its group
+is empty. Headers scroll with the list and cannot be clicked. Empty tab:
 `Your clippings will appear here…` or `Your images will appear here…`. No search
 result: `No clippings found` or `No images found`. File URLs stay in Text even
 when they point at an image.

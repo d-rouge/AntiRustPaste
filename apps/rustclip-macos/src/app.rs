@@ -31,8 +31,141 @@ use crate::views::{self, ClipListView, ClipPanel, PanelDelegate, PdfExportParts,
 pub(crate) const PANEL_W: f64 = 460.0;
 pub(crate) const PANEL_H: f64 = 480.0;
 pub(crate) const ROW_H: f64 = 54.0;
+pub(crate) const LIST_HEADER_H: f64 = 26.0;
+const LIST_BOTTOM_PAD: f64 = 4.0;
 pub(crate) const LIST_BOTTOM: f64 = 32.0;
 pub(crate) const SEARCH_H: f64 = 40.0;
+
+/// Vertical layout of the history list: a **PINNED** header and card for the
+/// pinned group, a **RECENT** header, then the unpinned rows. Headers are only
+/// present when they separate something.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ListLayout {
+    pinned: usize,
+    total: usize,
+    pinned_header: bool,
+    recent_header: bool,
+}
+
+impl ListLayout {
+    pub(crate) fn new(pinned: usize, total: usize) -> Self {
+        let pinned = pinned.min(total);
+        Self {
+            pinned,
+            total,
+            pinned_header: pinned > 0,
+            recent_header: pinned > 0 && pinned < total,
+        }
+    }
+
+    pub(crate) fn pinned(&self) -> usize {
+        self.pinned
+    }
+
+    fn rows_top(&self) -> f64 {
+        if self.pinned_header {
+            LIST_HEADER_H
+        } else {
+            0.0
+        }
+    }
+
+    pub(crate) fn pinned_header_y(&self) -> Option<f64> {
+        if self.pinned_header { Some(0.0) } else { None }
+    }
+
+    pub(crate) fn recent_header_y(&self) -> Option<f64> {
+        if self.recent_header {
+            Some(self.rows_top() + self.pinned as f64 * ROW_H)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn row_top(&self, index: usize) -> f64 {
+        if index < self.pinned {
+            return self.rows_top() + index as f64 * ROW_H;
+        }
+        let start = match self.recent_header_y() {
+            Some(header_y) => header_y + LIST_HEADER_H,
+            None => self.rows_top() + self.pinned as f64 * ROW_H,
+        };
+        start + index.saturating_sub(self.pinned) as f64 * ROW_H
+    }
+
+    pub(crate) fn content_height(&self) -> f64 {
+        if self.total == 0 {
+            return 0.0;
+        }
+        self.row_top(self.total - 1) + ROW_H + LIST_BOTTOM_PAD
+    }
+
+    /// Top and height of the rounded card behind the pinned rows.
+    pub(crate) fn pinned_card(&self) -> Option<(f64, f64)> {
+        if !self.pinned_header {
+            return None;
+        }
+        Some((self.rows_top() - 3.0, self.pinned as f64 * ROW_H + 6.0))
+    }
+
+    pub(crate) fn row_at(&self, y: f64) -> Option<usize> {
+        if y < 0.0 || self.total == 0 {
+            return None;
+        }
+        let mut low = 0;
+        let mut high = self.total;
+        while low < high {
+            let mid = low + (high - low) / 2;
+            let top = self.row_top(mid);
+            if y < top {
+                high = mid;
+            } else if y >= top + ROW_H {
+                low = mid + 1;
+            } else {
+                return Some(mid);
+            }
+        }
+        None
+    }
+
+    /// Half-open row range intersecting `top..bottom` in document coordinates.
+    pub(crate) fn visible_range(&self, top: f64, bottom: f64) -> (usize, usize) {
+        if self.total == 0 || bottom <= top {
+            return (0, 0);
+        }
+        let mut low = 0;
+        let mut high = self.total;
+        while low < high {
+            let mid = low + (high - low) / 2;
+            if self.row_top(mid) + ROW_H <= top {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        let start = low;
+        let mut high = self.total;
+        while low < high {
+            let mid = low + (high - low) / 2;
+            if self.row_top(mid) < bottom {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        (start, low)
+    }
+}
+
+/// Count the pinned prefix of the filtered rows. The store keeps pinned clips
+/// at the front, so the prefix is the pinned group.
+pub(crate) fn list_layout(s: &AppState, indices: &[usize]) -> ListLayout {
+    let pinned = indices
+        .iter()
+        .take_while(|&&index| s.store.clips.get(index).is_some_and(|clip| clip.pinned))
+        .count();
+    ListLayout::new(pinned, indices.len())
+}
 const MAX_IN_MEMORY_THUMBNAILS: usize = 256;
 const STATUS_ICON_PNG: &[u8] = include_bytes!("../../../assets/status-icon.png");
 
@@ -272,12 +405,14 @@ fn update_footer(s: &AppState) {
 
 fn refresh_ui() {
     with_state(|s| {
-        let len = filtered_indices(s).len();
+        let indices = filtered_indices(s);
+        let layout = list_layout(s, &indices);
+        let len = indices.len();
         if s.selected >= len {
             s.selected = len.saturating_sub(1);
         }
         let height = s.list.bounds().size.height;
-        let content = len as f64 * ROW_H;
+        let content = layout.content_height();
         s.scroll = s.scroll.clamp(0.0, (content - height).max(0.0));
         update_footer(s);
         s.list.setNeedsDisplay(true);
@@ -983,18 +1118,14 @@ fn present_panel() {
 pub(crate) fn handle_list_click(view: &ClipListView, event: &NSEvent) {
     let point = view.convertPoint_fromView(event.locationInWindow(), None);
     let width = view.bounds().size.width;
-    let (scroll, count) = with_state(|s| (s.scroll, filtered_indices(s).len()));
-    if count == 0 {
+    let (scroll, layout) = with_state(|s| {
+        let indices = filtered_indices(s);
+        let layout = list_layout(s, &indices);
+        (s.scroll, layout)
+    });
+    let Some(row) = layout.row_at(point.y + scroll) else {
         return;
-    }
-    let row = (point.y + scroll) / ROW_H;
-    if row < 0.0 {
-        return;
-    }
-    let row = row.floor() as usize;
-    if row >= count {
-        return;
-    }
+    };
     with_state(|s| s.selected = row);
     if point.x >= width - 36.0 {
         toggle_pin_at(row);
@@ -1005,10 +1136,10 @@ pub(crate) fn handle_list_click(view: &ClipListView, event: &NSEvent) {
 
 pub(crate) fn handle_list_scroll(delta: f64) {
     with_state(|s| {
+        let indices = filtered_indices(s);
+        let layout = list_layout(s, &indices);
         let height = s.list.bounds().size.height;
-        let count = filtered_indices(s).len();
-        let content = count as f64 * ROW_H;
-        let max = (content - height).max(0.0);
+        let max = (layout.content_height() - height).max(0.0);
         s.scroll = (s.scroll - delta).clamp(0.0, max);
         s.list.setNeedsDisplay(true);
     });
@@ -1016,7 +1147,9 @@ pub(crate) fn handle_list_scroll(delta: f64) {
 
 fn move_selection(delta: isize) {
     with_state(|s| {
-        let len = filtered_indices(s).len();
+        let indices = filtered_indices(s);
+        let layout = list_layout(s, &indices);
+        let len = indices.len();
         if len == 0 {
             return;
         }
@@ -1024,7 +1157,7 @@ fn move_selection(delta: isize) {
         let next = (current + delta).clamp(0, len as isize - 1) as usize;
         s.selected = next;
         let height = s.list.bounds().size.height;
-        let top = next as f64 * ROW_H;
+        let top = layout.row_top(next);
         if top < s.scroll {
             s.scroll = top;
         }
@@ -2095,6 +2228,49 @@ mod tests {
 
     fn ids(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn list_layout_without_pinned_rows_has_no_headers() {
+        let layout = ListLayout::new(0, 3);
+        assert_eq!(layout.row_top(0), 0.0);
+        assert_eq!(layout.row_top(2), 2.0 * ROW_H);
+        assert_eq!(layout.content_height(), 3.0 * ROW_H + 4.0);
+        assert!(layout.pinned_header_y().is_none());
+        assert!(layout.recent_header_y().is_none());
+        assert!(layout.pinned_card().is_none());
+        assert_eq!(layout.row_at(ROW_H + 1.0), Some(1));
+        assert_eq!(layout.row_at(-1.0), None);
+        assert_eq!(layout.visible_range(ROW_H, ROW_H * 2.0), (1, 2));
+    }
+
+    #[test]
+    fn list_layout_separates_pinned_and_recent_groups() {
+        let layout = ListLayout::new(2, 5);
+        assert_eq!(layout.pinned_header_y(), Some(0.0));
+        assert_eq!(layout.row_top(0), LIST_HEADER_H);
+        assert_eq!(layout.row_top(1), LIST_HEADER_H + ROW_H);
+
+        let recent_header = LIST_HEADER_H + 2.0 * ROW_H;
+        assert_eq!(layout.recent_header_y(), Some(recent_header));
+        assert_eq!(layout.row_top(2), recent_header + LIST_HEADER_H);
+        assert_eq!(layout.row_at(recent_header + 2.0), None);
+        assert_eq!(layout.row_at(LIST_HEADER_H + 5.0), Some(0));
+        assert_eq!(layout.visible_range(0.0, LIST_HEADER_H), (0, 0));
+        assert_eq!(
+            layout.visible_range(recent_header, recent_header + LIST_HEADER_H),
+            (2, 2)
+        );
+    }
+
+    #[test]
+    fn list_layout_with_only_pinned_rows_has_one_header() {
+        let layout = ListLayout::new(2, 2);
+        assert_eq!(layout.pinned_header_y(), Some(0.0));
+        assert!(layout.recent_header_y().is_none());
+        assert_eq!(layout.row_top(1), LIST_HEADER_H + ROW_H);
+        assert_eq!(layout.content_height(), LIST_HEADER_H + 2.0 * ROW_H + 4.0);
+        assert_eq!(layout.row_at(2.0), None);
     }
 
     #[test]

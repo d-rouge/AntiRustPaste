@@ -31,7 +31,7 @@ Current unit tests cover:
 | `rustclip` (macOS) | `settings` | Legacy NSEvent modifier migration |
 | `rustclip` (macOS) | `hotkey` | Shortcut formatting, Carbon modifier mapping |
 | `rustclip` (macOS) | `thumbnails` | Unsafe cache roots, filesystem-safe user key |
-| `rustclip` (macOS) | `app` | PDF destination is replaced atomically; a missing directory is reported without leaving a file; drag moves shift rows in both directions; order keeps drags and appends new images |
+| `rustclip` (macOS) | `app` | PDF destination is replaced atomically; a missing directory is reported without leaving a file; drag moves shift rows in both directions; order keeps drags and appends new images; list layout headers, card, hit-testing and visible range |
 
 Tests that touch the filesystem use `std::env::temp_dir()` plus a UUID and remove
 their directory. They never call AppKit or touch the pasteboard. The PDF tests
@@ -97,6 +97,8 @@ RUSTCLIP_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
 | 22c | Clear buttons with an empty section | Buttons are disabled; no alert or beep |
 | 22d | Pin a row with its right-side pin icon or ⌘P | Pin glyph fills, row moves to the pinned group and survives repeated copies/trim |
 | 22e | Unpin a row | Row leaves the pinned group; explicit delete still removes it |
+| 22f | History with pinned and unpinned clips | **PINNED** header and rounded card above **RECENT**; accent pin on pinned rows; headers scroll and do nothing when clicked |
+| 22g | Click the first row of each group after scrolling | Selection and pin toggle hit the row under the pointer, not a header |
 | 23 | Multi-monitor / full-screen app | Popup appears on the status item's screen and above full-screen spaces |
 | 24 | Quit and relaunch | History and preferences persist; thumbnails regenerate if the temp cache was purged |
 | 25 | Images tab, one or more images, click **PDF…** | Export window lists every image selected; status reads `N of N images selected` |

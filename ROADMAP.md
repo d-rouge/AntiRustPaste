@@ -34,6 +34,8 @@ removed only by an explicit delete or clear action.
   eviction, not against an explicit clear.
 - Search and section filtering include pinned clips. The pin indicator remains
   visible when a pinned row is selected.
+- Pinned rows sit in a rounded card under a **PINNED** header, with a **RECENT**
+  header before the unpinned groups; both headers scroll with the list.
 - The pin state survives relaunch and a corrupt/missing history uses
   `pinned = false`.
 - The macOS menu/bar and future shells share the same core ordering and trim

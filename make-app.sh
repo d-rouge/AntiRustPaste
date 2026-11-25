@@ -6,13 +6,37 @@ cd "$(dirname "$0")"
 
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' apps/rustclip-macos/Cargo.toml | head -n1)
 APP="dist/RustClip.app"
+UNIVERSAL="${RUSTCLIP_UNIVERSAL:-0}"
 
-cargo build --release
+if [ "$UNIVERSAL" = "1" ]; then
+  missing=""
+  for target in aarch64-apple-darwin x86_64-apple-darwin; do
+    if ! rustup target list --installed 2>/dev/null | grep -qx "$target"; then
+      missing="$missing $target"
+    fi
+  done
+  if [ -n "$missing" ]; then
+    echo "RUSTCLIP_UNIVERSAL=1 needs: rustup target add$missing" >&2
+    exit 1
+  fi
+  cargo build --release --target aarch64-apple-darwin
+  cargo build --release --target x86_64-apple-darwin
+else
+  cargo build --release
+fi
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-cp target/release/rustclip "$APP/Contents/MacOS/rustclip"
+if [ "$UNIVERSAL" = "1" ]; then
+  lipo -create \
+    -output "$APP/Contents/MacOS/rustclip" \
+    target/aarch64-apple-darwin/release/rustclip \
+    target/x86_64-apple-darwin/release/rustclip
+  echo "Architectures: $(lipo -archs "$APP/Contents/MacOS/rustclip")"
+else
+  cp target/release/rustclip "$APP/Contents/MacOS/rustclip"
+fi
 cp packaging/Info.plist "$APP/Contents/Info.plist"
 cp assets/app-icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"

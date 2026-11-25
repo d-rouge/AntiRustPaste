@@ -24,12 +24,13 @@ cargo fmt --all -- --check
 ./make-app.sh                     # release bundle in dist/RustClip.app
 ```
 
-The workspace has three packages:
+The workspace has four packages:
 
 - `apps/rustclip-macos` (binary `rustclip`) — AppKit shell;
 - `crates/rustclip-core` — platform-neutral model/storage/settings/filtering/
   thumbnail worker;
-- `crates/rustclip-imaging` — pure codec with `#![forbid(unsafe_code)]`.
+- `crates/rustclip-imaging` — pure codec with `#![forbid(unsafe_code)]`;
+- `crates/rustclip-pdf` — pure image-to-PDF writer.
 
 Core must stay free of UI toolkits and native clipboard APIs. See
 [platforms.md](platforms.md) before adding Windows or Linux.
@@ -96,6 +97,12 @@ Agents MUST NOT grant, revoke or script this permission. Ask the operator.
 3. copies `packaging/Info.plist` and sets `CFBundleShortVersionString` from
    `Cargo.toml`;
 4. ad-hoc signs the bundle (`codesign --force --sign -`).
+
+Set `RUSTCLIP_UNIVERSAL=1` to build both slices and `lipo` them into a universal
+binary (`rustup target add aarch64-apple-darwin x86_64-apple-darwin` first).
+Tag-driven releases are built and published by
+[`.github/workflows/release.yml`](../.github/workflows/release.yml); the process
+is in [releasing.md](releasing.md).
 
 The bundle declares `LSUIElement=true`, `CFBundleIdentifier=com.rustclip.app`,
 `NSPrincipalClass=NSApplication` and macOS 13 as the minimum. Ad-hoc signing

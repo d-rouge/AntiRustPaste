@@ -1,0 +1,157 @@
+name: Release
+
+# Push a vX.Y.Z tag to build, validate the version and publish the release.
+# The workflow can also be re-run for an existing tag from the Actions tab.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release (vX.Y.Z)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Validate tag against Cargo.toml
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          case "$tag" in
+            v[0-9]*) ;;
+            *)
+              echo "::error::tag '$tag' must look like v1.2.3"
+              exit 1
+              ;;
+          esac
+
+          version="${tag#v}"
+          cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' apps/rustclip-macos/Cargo.toml | head -n1)"
+          if [ "$version" != "$cargo_version" ]; then
+            echo "::error::tag $tag does not match apps/rustclip-macos/Cargo.toml ($cargo_version); bump the version and commit before tagging"
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag"
+
+  build:
+    name: Build universal app
+    needs: version
+    runs-on: macos-latest
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Format, lint and test
+        run: ./scripts/check.sh
+
+      - name: Build the app bundle
+        env:
+          RUSTCLIP_UNIVERSAL: "1"
+        run: ./make-app.sh
+
+      - name: Verify version and architectures
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          plist_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' dist/RustClip.app/Contents/Info.plist)"
+          if [ "$plist_version" != "$VERSION" ]; then
+            echo "::error::bundle version $plist_version does not match $VERSION"
+            exit 1
+          fi
+          archs="$(lipo -archs dist/RustClip.app/Contents/MacOS/rustclip)"
+          echo "Architectures: $archs"
+          echo "$archs" | grep -q arm64
+          echo "$archs" | grep -q x86_64
+
+      - name: Package zip, dmg and checksums
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release
+          ditto -c -k --keepParent dist/RustClip.app "dist/release/RustClip-$VERSION-universal.zip"
+
+          stage="$(mktemp -d)"
+          cp -R dist/RustClip.app "$stage/RustClip.app"
+          ln -s /Applications "$stage/Applications"
+          hdiutil create -quiet -volname "RustClip $VERSION" -srcfolder "$stage" -ov -format UDZO "dist/release/RustClip-$VERSION-universal.dmg"
+          rm -rf "$stage"
+
+          (cd dist/release && shasum -a 256 ./* > SHA256SUMS.txt)
+          ls -lh dist/release
+
+      - name: Upload the release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ needs.version.outputs.version }}
+          path: dist/release/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download the built files
+        uses: actions/download-artifact@v4
+        with:
+          name: release-${{ needs.version.outputs.version }}
+          path: dist/release
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          notes="Universal macOS build (Apple Silicon and Intel), macOS 13 or newer.
+          Ad-hoc signed but not notarized: on first launch, right-click RustClip.app
+          and choose Open. SHA256SUMS.txt contains the file checksums."
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists; replacing its assets"
+            gh release upload "$TAG" dist/release/* --clobber
+          else
+            gh release create "$TAG" dist/release/* \
+              --verify-tag \
+              --title "RustClip $VERSION" \
+              --notes "$notes" \
+              --generate-notes
+          fi

@@ -59,6 +59,7 @@ are called through small FFI shims.
 | [Roadmap](ROADMAP.md) | Pinned-clipping status and image export work |
 | [Decisions](docs/decisions.md) | Why AppKit/objc2, JSON blobs, Carbon, CGEvent, LaunchAgent |
 | [Platforms](docs/platforms.md) | What exists per OS and what is left to implement |
+| [Releasing](docs/releasing.md) | Version bump, release tag, GitHub Actions build and publish |
 | [Agent playbook](docs/agent-playbook.md) | Safe recipes and crash-avoidance patterns |
 | [AGENTS.md](AGENTS.md) | Rules for coding agents in this repository |
 

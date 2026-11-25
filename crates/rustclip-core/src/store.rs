@@ -48,6 +48,10 @@ pub struct Clip {
     pub source_bundle: Option<String>,
     pub date_ms: i64,
     pub hash: u64,
+    /// Pinned clips stay above unpinned clips and are exempt from automatic
+    /// trimming. They are removed only by an explicit delete/clear.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 impl Clip {
@@ -209,14 +213,18 @@ impl Store {
     pub fn insert(&mut self, captured: Captured, max: usize) -> bool {
         let hash = hash_captured(&captured);
 
-        // Re-copying something that is already in the history moves it to the top
-        // instead of creating a duplicate (this is what CopyClip does too).
-        if let Some(pos) = self.clips.iter().position(|c| c.hash == hash) {
+        // Re-copying something that is already in the history moves it to the
+        // top instead of creating a duplicate. A pinned duplicate stays pinned.
+        let was_pinned = if let Some(pos) = self.clips.iter().position(|c| c.hash == hash) {
             let old = self.clips.remove(pos);
+            let pinned = old.pinned;
             if let Some(blob) = old.blob {
                 self.delete_blob(&blob);
             }
-        }
+            pinned
+        } else {
+            false
+        };
 
         let blob = captured.data.as_deref().and_then(|d| self.write_blob(d));
         let clip = Clip {
@@ -233,21 +241,51 @@ impl Store {
             source_bundle: None,
             date_ms: chrono::Utc::now().timestamp_millis(),
             hash,
+            pinned: was_pinned,
         };
-        self.clips.insert(0, clip);
+        let insert_at = if was_pinned {
+            0
+        } else {
+            self.clips.iter().filter(|clip| clip.pinned).count()
+        };
+        self.clips.insert(insert_at, clip);
         self.trim(max);
         true
     }
 
+    /// Trim unpinned clips to `max`; pinned clips never count and never leave.
     pub fn trim(&mut self, max: usize) {
         let max = max.max(1);
-        while self.clips.len() > max {
-            if let Some(old) = self.clips.pop()
-                && let Some(blob) = old.blob
-            {
+        while self.clips.iter().filter(|clip| !clip.pinned).count() > max {
+            let Some(index) = self.clips.iter().rposition(|clip| !clip.pinned) else {
+                break;
+            };
+            let old = self.clips.remove(index);
+            if let Some(blob) = old.blob {
                 self.delete_blob(&blob);
             }
         }
+    }
+
+    /// Pin or unpin a clip and move it into the matching group. Returns its new
+    /// index, or `None` for an invalid index.
+    pub fn set_pinned(&mut self, index: usize, pinned: bool) -> Option<usize> {
+        if index >= self.clips.len() {
+            return None;
+        }
+        if self.clips[index].pinned == pinned {
+            return Some(index);
+        }
+
+        let mut clip = self.clips.remove(index);
+        clip.pinned = pinned;
+        let insert_at = if pinned {
+            0
+        } else {
+            self.clips.iter().filter(|clip| clip.pinned).count()
+        };
+        self.clips.insert(insert_at, clip);
+        Some(insert_at)
     }
 
     pub fn remove(&mut self, index: usize) -> bool {
@@ -462,6 +500,54 @@ mod tests {
         assert_eq!(store.clips.len(), 2);
         assert_eq!(store.clips[0].text.as_deref(), Some("first"));
         assert_eq!(store.clips[1].text.as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn pinning_keeps_a_clip_above_the_limit() {
+        let temp = TempDir::new();
+        let mut store = temp.store();
+
+        store.insert(text_clip("pinned"), 1);
+        store.set_pinned(0, true).expect("pin first clip");
+        store.insert(text_clip("second"), 1);
+        store.insert(text_clip("third"), 1);
+
+        assert_eq!(store.clips.len(), 2);
+        assert_eq!(store.clips[0].text.as_deref(), Some("pinned"));
+        assert!(store.clips[0].pinned);
+        assert_eq!(store.clips[1].text.as_deref(), Some("third"));
+    }
+
+    #[test]
+    fn duplicate_of_pinned_clip_stays_pinned_at_the_top() {
+        let temp = TempDir::new();
+        let mut store = temp.store();
+
+        store.insert(text_clip("first"), 10);
+        store.insert(text_clip("second"), 10);
+        store.set_pinned(1, true).expect("pin first clip");
+        store.insert(text_clip("first"), 10);
+
+        assert_eq!(store.clips.len(), 2);
+        assert!(store.clips[0].pinned);
+        assert_eq!(store.clips[0].text.as_deref(), Some("first"));
+        assert!(!store.clips[1].pinned);
+    }
+
+    #[test]
+    fn unpinning_moves_a_clip_into_the_unpinned_group() {
+        let temp = TempDir::new();
+        let mut store = temp.store();
+
+        store.insert(text_clip("one"), 10);
+        store.insert(text_clip("two"), 10);
+        store.set_pinned(1, true).expect("pin one");
+        let new_index = store.set_pinned(0, false).expect("unpin one");
+
+        assert_eq!(new_index, 0);
+        assert!(!store.clips[0].pinned);
+        assert_eq!(store.clips[0].text.as_deref(), Some("one"));
+        assert!(!store.clips[1].pinned);
     }
 
     #[test]

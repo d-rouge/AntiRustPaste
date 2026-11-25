@@ -228,9 +228,8 @@ fn set_section(section: ClipboardSection) {
 fn update_footer(s: &AppState) {
     let count = filtered_indices(s).len();
     let label = s.section.footer_label(count);
-    s.footer.setStringValue(&NSString::from_str(&format!(
-        "{label}   ·   ⏎ paste   ⌫ delete"
-    )));
+    s.footer
+        .setStringValue(&NSString::from_str(&format!("{label} · ⏎ · ⌫ · ⌘P pin")));
     s.clear_text_button.setEnabled(
         s.store
             .clips
@@ -972,6 +971,38 @@ fn paste_selected() {
     paste_filtered(selected, true);
 }
 
+fn toggle_pin_selected() {
+    let snapshot = with_state(|s| {
+        let store_index = *filtered_indices(s).get(s.selected)?;
+        let clip = s.store.clips.get(store_index)?;
+        Some((store_index, clip.pinned))
+    });
+    let Some((store_index, pinned)) = snapshot else {
+        NSBeep();
+        return;
+    };
+
+    let new_index = with_state(|s| {
+        let new_index = s.store.set_pinned(store_index, !pinned)?;
+        s.store.save();
+        Some(new_index)
+    });
+    let Some(new_index) = new_index else {
+        return;
+    };
+
+    with_state(|s| {
+        let filtered = filtered_indices(s);
+        s.selected = filtered
+            .iter()
+            .position(|index| *index == new_index)
+            .unwrap_or(0);
+        s.list.setNeedsDisplay(true);
+    });
+    refresh_ui();
+    move_selection(0);
+}
+
 fn copy_selected() {
     let selected = with_state(|s| s.selected);
     paste_filtered(selected, false);
@@ -1059,6 +1090,10 @@ pub(crate) fn handle_key_event(event: &NSEvent) -> bool {
             }
             19 => {
                 set_section(ClipboardSection::Images);
+                return true;
+            }
+            35 => {
+                toggle_pin_selected();
                 return true;
             }
             _ => {}

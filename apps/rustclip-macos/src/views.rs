@@ -244,7 +244,7 @@ fn draw_list(view: &ClipListView) {
             let Some(&clip_index) = indices.get(visible) else {
                 continue;
             };
-            let (kind, hash, blob, title, subtitle) = {
+            let (kind, hash, blob, title, subtitle, pinned) = {
                 let Some(clip) = s.store.clips.get(clip_index) else {
                     continue;
                 };
@@ -254,6 +254,7 @@ fn draw_list(view: &ClipListView) {
                     clip.blob.clone(),
                     image_title(clip),
                     clip.subtitle(),
+                    clip.pinned,
                 )
             };
             let y = visible as f64 * ROW_H - scroll;
@@ -305,9 +306,10 @@ fn draw_list(view: &ClipListView) {
                 path.fill();
             }
 
+            let pin_space = if pinned { 24.0 } else { 0.0 };
             let title_rect = NSRect::new(
                 NSPoint::new(text_left, y + 10.0),
-                NSSize::new(width - text_left - 16.0, 18.0),
+                NSSize::new(width - text_left - 16.0 - pin_space, 18.0),
             );
             let title_color = if is_selected { &white } else { &label_color };
             draw_text(
@@ -317,6 +319,16 @@ fn draw_list(view: &ClipListView) {
                 title_color,
                 NSTextAlignment::Left,
             );
+
+            if pinned {
+                draw_text(
+                    "📌",
+                    NSRect::new(NSPoint::new(width - 32.0, y + 9.0), NSSize::new(22.0, 16.0)),
+                    &NSFont::systemFontOfSize(11.0),
+                    if is_selected { &white } else { &secondary },
+                    NSTextAlignment::Center,
+                );
+            }
 
             let subtitle_rect = NSRect::new(
                 NSPoint::new(text_left, y + 30.0),

@@ -67,7 +67,7 @@ They depend on core; core never depends on a shell.
 | Start at login | ✅ LaunchAgent | ⬜ Startup folder / Run key | ⬜ XDG autostart `.desktop` |
 | Thumbnail image loading | ✅ `NSImage` | ⬜ decoder → texture/bitmap | ⬜ decoder → texture/bitmap |
 | Thumbnail cache path | ✅ `/tmp/...` (boot-cleared) | ⬜ `%TEMP%\RustClip` | ⬜ `$XDG_CACHE_HOME`/tmp |
-| Tests | ✅ 5 shell + 17 core + 10 imaging | ⬜ | ⬜ |
+| Tests | ✅ 5 shell + 21 core + 10 imaging | ⬜ | ⬜ |
 
 Legend: ✅ done, ⬜ not implemented.
 
@@ -167,6 +167,8 @@ desktop/compositor in the PR/handoff.
 
 ## What core already gives a new shell
 
+- `Clip.pinned`, pinned-first ordering, `Store::set_pinned` and a trim that
+  skips pinned clips.
 - `Store::open`, `Store::open_at`, insert/dedup/trim/remove/clear, atomic JSON
   saves, corrupt-index quarantine, blob validation and missing-blob recovery.
 - Preview normalisation, relative time, human-readable sizes.

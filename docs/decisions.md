@@ -246,3 +246,20 @@ format matrix and watching, but is newer and needs platform testing.
 
 **Boundary.** Core sees only `Captured`/`Clip`; no clipboard crate becomes a core
 dependency. Platform shells own permissions and native formats.
+
+## ADR-015: Pinned clips are core metadata with pinned-first ordering
+
+**Decision.** Add `pinned: bool` to `rustclip_core::Clip`, keep pinned clips at
+the front of the vector, and make `trim` count/remove only unpinned clips. Use
+`⌘P` plus a row glyph in the macOS shell; a row context menu is a follow-up.
+
+**Why.** Pinning changes ordering and eviction, not capture or rendering, so it
+belongs in the platform-neutral store and every shell must apply the same rules.
+The field is additive with `#[serde(default)]`, so old histories need no
+migration. A pinned duplicate content hash keeps its pinned flag and moves to
+the top of the pinned group. Explicit delete/section clear/clear-all still
+removes pinned clips; pinning protects only against automatic eviction.
+
+**Trade-off.** The history can exceed the configured maximum when many clips are
+pinned. This is intentional and visible in the row count; the alternative
+(evicting pinned clips) defeats the feature.

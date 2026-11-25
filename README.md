@@ -17,6 +17,8 @@ are called through small FFI shims.
 - Remembers the app a clipping came from and shows it in the list.
 - Re-copying something already in the history moves it to the top instead of
   duplicating it.
+- Pin clippings (`⌘P`) to keep them above the list and exempt from automatic
+  trimming until explicitly deleted.
 - Global shortcut (⇧⌘V by default, recordable in Preferences) opens the popup.
 - Popup with live search, keyboard navigation, ⏎ to paste, ⌫ to delete, esc to
   close. Choosing a clipping writes it to the pasteboard, reactivates the
@@ -44,6 +46,7 @@ are called through small FFI shims.
 | [Behaviour](docs/behavior.md) | Exact feature contract and edge cases |
 | [Development](docs/development.md) | Build, run, bundle, debugging, permissions |
 | [Testing](docs/testing.md) | Unit tests, GUI matrix, hostile inputs, isolation |
+| [Roadmap](ROADMAP.md) | Pinned-clipping status and planned image→PDF export |
 | [Decisions](docs/decisions.md) | Why AppKit/objc2, JSON blobs, Carbon, CGEvent, LaunchAgent |
 | [Platforms](docs/platforms.md) | What exists per OS and what is left to implement |
 | [Agent playbook](docs/agent-playbook.md) | Safe recipes and crash-avoidance patterns |
@@ -105,6 +108,7 @@ location is used instead. `RUSTCLIP_OPEN_PREFS=1`, `RUSTCLIP_OPEN_PANEL=1` and
 | ↑ / ↓ | Move the selection |
 | ⏎ | Paste the selected clipping |
 | ⌘C | Copy the selected clipping without pasting |
+| ⌘P | Pin / unpin the selected clipping |
 | ⌘1 / ⌘2 | Switch to the Text / Images tab |
 | ⌫ | Delete the selected clipping (when search is empty) |
 | esc | Close the popup |

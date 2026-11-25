@@ -232,6 +232,9 @@ crates/rustclip-imaging/         pure-Rust image codec
 
 **Known gaps**
 
+- Pinned clippings are implemented in the macOS shell; the row context menu is
+  still a follow-up (use `⌘P`).
+- PDF export from selected images is planned; see `ROADMAP.md`.
 - Windows and Linux shells are not implemented; see `docs/platforms.md`.
 - No per-row accessibility elements in the custom-drawn history list.
 - The Images tab is a compact list, not a grid.

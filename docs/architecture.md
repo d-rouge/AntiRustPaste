@@ -173,7 +173,8 @@ control switches between **Text** and **Images**; ⌘1/⌘2 do the same. The sea
 field is the first responder, and a local key monitor handles arrows, Enter,
 Escape, Delete, ⌘1/⌘2 and ⌘C before AppKit's responder chain. The footer holds
 **Clear Text** and **Clear Images** buttons; each calls
-`Store::remove_where` for its section and then prunes thumbnails. Presentation is
+`Store::remove_where` for its section and then prunes thumbnails. `⌘P` toggles
+the pin of the selected row; pinned rows draw a pin glyph. Presentation is
 deferred by one 50 ms timer after a status-item click: making the panel key
 inside the mouse event lets the status bar take key back and immediately fires
 `windowDidResignKey`.
@@ -245,8 +246,10 @@ blobs/<uuid>.bin image / RTF / HTML bytes
 ```
 
 `Clip` fields: `id`, `kind`, `preview`, `text`, `data_type`, `blob`, `byte_len`,
-`width`, `height`, `source_name`, `source_bundle`, `date_ms`, `hash`. The image
-dimensions are optional and default to `None` for older histories.
+`width`, `height`, `source_name`, `source_bundle`, `date_ms`, `hash`, `pinned`.
+Image dimensions and `pinned` are optional/defaulted for older histories. The
+vector is maintained pinned-first; `Store::trim` removes only unpinned clips and
+`Store::set_pinned` moves a clip into the matching group.
 
 Guarantees:
 

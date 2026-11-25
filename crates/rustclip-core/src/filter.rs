@@ -57,6 +57,7 @@ mod tests {
             source_bundle: Some("com.apple.Safari".to_string()),
             date_ms: 0,
             hash: 1,
+            pinned: false,
         }
     }
 

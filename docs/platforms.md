@@ -81,7 +81,7 @@ Legend: ✅ done, ⬜ not implemented.
 
 ## macOS (implemented)
 
-- Menu bar item with the highlighter-and-check template icon (tooltip
+- Menu bar item with the spray-can template icon (tooltip
   `AntiRustPaste — clipboard history`).
 - Left-click toggles the popup; right-click opens the status menu.
 - Popup: search, Text/Images/Commands tabs, keyboard navigation, paste, delete,

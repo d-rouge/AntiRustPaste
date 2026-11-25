@@ -2630,7 +2630,7 @@ fn show_about() {
     let alert = NSAlert::new(mtm);
     alert.setMessageText(&NSString::from_str("AntiRustPaste"));
     alert.setInformativeText(&NSString::from_str(&format!(
-        "Version {}\n\nA pure-Rust clipboard history manager for macOS, inspired by CopyClip.\n\nShortcut: {}\nHistory: {}",
+        "Version {}\n\nA pure-Rust clipboard history manager\n\nShortcut: {}\nHistory: {}",
         env!("CARGO_PKG_VERSION"),
         shortcut,
         dir

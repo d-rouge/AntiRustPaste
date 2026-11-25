@@ -10,7 +10,7 @@ assets are used.
 
 - AntiRustPaste launches as a menu-bar accessory (`LSUIElement`, activation policy
   `.accessory`). It has no Dock icon and no main window at startup.
-- A highlighter-and-check template icon appears in the status bar.
+- A spray-can template icon appears in the status bar.
 - Left-click the symbol: toggle the history popup.
 - Right-click the symbol: show the status menu.
 - Quit from the status menu. History is already saved on every change.

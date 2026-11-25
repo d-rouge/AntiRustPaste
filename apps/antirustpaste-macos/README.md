@@ -1,6 +1,6 @@
 # antirustpaste-macos
 
-The implemented macOS shell. It owns AppKit (`NSStatusItem`, the highlighter template icon, `NSPanel`,
+The implemented macOS shell. It owns AppKit (`NSStatusItem`, the spray-can template icon, `NSPanel`,
 `NSVisualEffectView`), `NSPasteboard`, Carbon hot keys, CoreGraphics paste,
 Accessibility, `NSUserDefaults` and the LaunchAgent.
 

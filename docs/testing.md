@@ -100,6 +100,10 @@ RUSTCLIP_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
 | 22f | History with pinned and unpinned clips | **PINNED** header and rounded card above **RECENT**; accent pin on pinned rows; headers scroll and do nothing when clicked |
 | 22g | Click the first row of each group after scrolling | Selection and pin toggle hit the row under the pointer, not a header |
 | 22h | Scroll a long list to the end and back | Rows and the pinned card stop at the list edges; nothing paints over the search field or the footer |
+| 22i | Images tab, empty search, press Space | Quick Look opens on the selected image and sizes itself to the picture; the popup stays visible underneath |
+| 22j | Press Space or Esc in Quick Look, then Space again | Preview closes, the temporary file disappears and the popup takes key back so Space opens it again |
+| 22k | Type a query containing a space in the Images tab | Space is typed into the search field instead of opening Quick Look |
+| 22l | Preview an image, quit the app | No file remains under `<thumbnail cache>/previews/` |
 | 23 | Multi-monitor / full-screen app | Popup appears on the status item's screen and above full-screen spaces |
 | 24 | Quit and relaunch | History and preferences persist; thumbnails regenerate if the temp cache was purged |
 | 25 | Images tab, one or more images, click **PDF…** | Export window lists every image selected; status reads `N of N images selected` |
@@ -133,6 +137,7 @@ crash fix.
 | Blob file missing | Record dropped on load |
 | Export selected image whose blob vanished | Export aborts with an alert and writes no file |
 | Export destination is not writable | Temporary write fails, no partial file, alert |
+| Quick Look blob is missing or unreadable | Beep, no preview file, app stays responsive |
 | Preview field is extremely long | Truncated to 200 characters on load; drawing stays bounded |
 | Text clip larger than 50 MiB | Skipped |
 | Image/data blob larger than 50 MiB or empty | Skipped |

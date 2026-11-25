@@ -285,6 +285,34 @@ PDF window
   the 50 MiB blob cap and the 32 MP imaging cap, and no second worker is allowed
   without the operator's approval.
 
+## Quick Look preview
+
+```
+Space (Images tab, empty query) / ⌘Y
+  └── app::toggle_image_preview
+       ├── shared QLPreviewPanel already visible -> close and clean up
+       ├── read the selected clip's original blob
+       ├── write <thumb cache>/previews/preview-<hash>.<ext> (dir 0700, file 0600)
+       ├── panel.dataSource/delegate = AppDelegate; reloadData
+       └── makeKeyAndOrderFront
+QLPreviewPanel
+  ├── numberOfPreviewItemsInPreviewPanel:  -> 1
+  ├── previewPanel:previewItemAtIndex:     -> the file NSURL
+  └── previewPanel:handleEvent:            -> Space/Esc close the preview
+1 s poll / close
+  └── finish_closed_preview: delete the file, clear the data source, and give
+      the popup key back when the app is still active
+```
+
+- `QLPreviewPanel` is the system Quick Look singleton (QuickLookUI), so the
+  preview looks and behaves like Finder's. `NSURL` itself conforms to
+  `QLPreviewItem`, so no custom preview-item class is needed.
+- The popup normally hides when it resigns key; `schedule_hide_from_resign`
+  skips that while the Quick Look panel is visible, and closing the preview
+  re-keys the popup. If the user switched apps instead, the popup hides.
+- Preview files live beside the thumbnails so they are boot-cleared, and the
+  directory is reset at launch and removed on quit.
+
 ## Storage
 
 `rustclip_core::Store` uses `dirs::data_dir()/RustClip` by default, so each shell

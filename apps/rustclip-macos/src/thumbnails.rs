@@ -74,6 +74,23 @@ pub fn prune_now(valid: &std::collections::HashSet<u64>) {
     rustclip_core::thumbnails::prune_now(&cache_dir(), valid);
 }
 
+/// Quick Look preview files live beside the thumbnails so they are boot-cleared
+/// with the cache. They hold full images, so the directory is private.
+pub fn preview_dir() -> PathBuf {
+    cache_dir().join("previews")
+}
+
+pub fn reset_previews() {
+    let _ = fs::remove_dir_all(preview_dir());
+}
+
+pub fn ensure_preview_dir() -> std::io::Result<PathBuf> {
+    let dir = preview_dir();
+    fs::create_dir_all(&dir)?;
+    private_dir(&dir);
+    Ok(dir)
+}
+
 pub fn nsimage_from_png(bytes: Vec<u8>) -> Option<Retained<NSImage>> {
     let data = NSData::from_vec(bytes);
     let image = NSImage::initWithData(NSImage::alloc(), &data)?;

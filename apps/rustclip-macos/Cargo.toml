@@ -13,6 +13,7 @@ objc2 = "0.6.5"
 objc2-app-kit = "0.3.2"
 objc2-foundation = "0.3.2"
 objc2-quartz-core = { version = "0.3.2", features = ["CALayer"] }
+objc2-quick-look-ui = { version = "0.3.2", default-features = false, features = ["QLPreviewPanel", "QLPreviewItem", "objc2-app-kit"] }
 rustclip-core = { path = "../../crates/rustclip-core" }
 rustclip-imaging = { path = "../../crates/rustclip-imaging" }
 rustclip-pdf = { path = "../../crates/rustclip-pdf" }

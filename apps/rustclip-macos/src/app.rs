@@ -14,6 +14,9 @@ use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::*;
 use objc2_foundation::*;
+use objc2_quick_look_ui::{
+    QLPreviewItem, QLPreviewPanel, QLPreviewPanelDataSource, QLPreviewPanelDelegate,
+};
 
 use crate::hotkey::{self, Hotkey};
 use crate::paste;
@@ -248,6 +251,10 @@ pub(crate) struct AppState {
     pub panel_delegate: Retained<PanelDelegate>,
     pub prefs: Option<PrefsParts>,
     pub pdf_export: Option<PdfExportState>,
+    /// File URL handed to the shared Quick Look panel; `None` when it is closed.
+    pub preview_item: Option<Retained<NSURL>>,
+    /// Full-size image written for Quick Look; deleted when the preview closes.
+    pub preview_file: Option<PathBuf>,
     pub selected: usize,
     pub scroll: f64,
     pub query: String,
@@ -447,6 +454,18 @@ define_class!(
         ) -> bool {
             false
         }
+
+        #[unsafe(method(applicationWillTerminate:))]
+        fn application_will_terminate(&self, _notification: &NSNotification) {
+            guard("application_will_terminate", || {
+                if let Some(preview) = preview_panel() {
+                    preview.orderOut(None);
+                }
+                cleanup_preview();
+                thumbnails::reset_previews();
+            });
+        }
+
     }
 
     unsafe impl NSControlTextEditingDelegate for AppDelegate {
@@ -689,6 +708,60 @@ define_class!(
                 remove_ignored_app();
             });
         }
+
+    }
+
+    unsafe impl QLPreviewPanelDataSource for AppDelegate {
+        #[unsafe(method(numberOfPreviewItemsInPreviewPanel:))]
+        fn preview_item_count(&self, _panel: Option<&QLPreviewPanel>) -> NSInteger {
+            guard_value("preview_item_count", || {
+                with_state(|s| if s.preview_item.is_some() { 1 } else { 0 })
+            })
+            .unwrap_or(0)
+        }
+
+        #[unsafe(method_id(previewPanel:previewItemAtIndex:))]
+        fn preview_item_at_index(
+            &self,
+            _panel: Option<&QLPreviewPanel>,
+            index: NSInteger,
+        ) -> Option<Retained<ProtocolObject<dyn QLPreviewItem>>> {
+            guard_value("preview_item_at_index", || {
+                if index != 0 {
+                    return None;
+                }
+                let url = with_state(|s| s.preview_item.clone())?;
+                Some(ProtocolObject::from_retained(url))
+            })
+            .flatten()
+        }
+
+    }
+
+    unsafe impl NSWindowDelegate for AppDelegate {}
+
+    unsafe impl QLPreviewPanelDelegate for AppDelegate {
+        #[unsafe(method(previewPanel:handleEvent:))]
+        fn preview_panel_handle_event(
+            &self,
+            _panel: Option<&QLPreviewPanel>,
+            event: Option<&NSEvent>,
+        ) -> bool {
+            guard_value("preview_panel_handle_event", || {
+                let Some(event) = event else {
+                    return false;
+                };
+                if event.r#type() != NSEventType::KeyDown {
+                    return false;
+                }
+                if event.keyCode() == 49 || event.keyCode() == 53 {
+                    close_image_preview();
+                    return true;
+                }
+                false
+            })
+            .unwrap_or(false)
+        }
     }
 );
 
@@ -723,6 +796,7 @@ fn setup_app() {
     store.trim(settings.max_clips);
     store.save();
     thumbnails::cleanup_legacy_cache();
+    thumbnails::reset_previews();
     let valid: HashSet<u64> = store.clips.iter().map(|clip| clip.hash).collect();
     thumbnails::prune_now(&valid);
     if settings.start_at_login {
@@ -781,6 +855,8 @@ fn setup_app() {
         panel_delegate,
         prefs: None,
         pdf_export: None,
+        preview_item: None,
+        preview_file: None,
         selected: 0,
         scroll: 0.0,
         query: String::new(),
@@ -918,6 +994,7 @@ fn update_frontmost_app() {
 }
 
 fn poll_pasteboard() {
+    finish_closed_preview();
     let pb = pasteboard::general();
     let current = pb.changeCount();
     update_frontmost_app();
@@ -978,6 +1055,9 @@ fn poll_pasteboard() {
 /// A click outside the popup makes it resign key. Delay the hide briefly so a
 /// click on the status item can cancel it and toggle the popup instead.
 pub(crate) fn schedule_hide_from_resign() {
+    if preview_is_open() {
+        return;
+    }
     let token = with_state(|s| {
         s.hide_token = s.hide_token.wrapping_add(1);
         s.hide_token
@@ -1003,6 +1083,12 @@ pub(crate) fn hide_panel() {
         s.panel.clone()
     });
     panel.orderOut(None);
+    if with_state(|s| s.preview_item.is_some()) {
+        if let Some(preview) = preview_panel() {
+            preview.orderOut(None);
+        }
+        cleanup_preview();
+    }
 }
 
 fn toggle_panel() {
@@ -1307,8 +1393,17 @@ pub(crate) fn handle_key_event(event: &NSEvent) -> bool {
                 open_pdf_export();
                 return true;
             }
+            16 => {
+                toggle_image_preview();
+                return true;
+            }
             _ => {}
         }
+    }
+
+    if key == 49 && with_state(|s| s.section == ClipboardSection::Images && s.query.is_empty()) {
+        toggle_image_preview();
+        return true;
     }
 
     match key {
@@ -2168,6 +2263,153 @@ fn close_pdf_export() {
     let window = with_state(|s| s.pdf_export.as_ref().map(|pdf| pdf.parts.window.clone()));
     if let Some(window) = window {
         window.orderOut(None);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Quick Look preview
+// ---------------------------------------------------------------------------
+
+fn preview_panel() -> Option<Retained<QLPreviewPanel>> {
+    let mtm = main_thread();
+    if unsafe { QLPreviewPanel::sharedPreviewPanelExists(mtm) } {
+        unsafe { QLPreviewPanel::sharedPreviewPanel(mtm) }
+    } else {
+        None
+    }
+}
+
+fn preview_is_open() -> bool {
+    with_state(|s| s.preview_item.is_some())
+        && preview_panel().is_some_and(|panel| panel.isVisible())
+}
+
+/// Space (Images tab) or ⌘Y: show the selected image in the shared Quick Look
+/// panel, or close it when it is already open.
+fn toggle_image_preview() {
+    let mtm = main_thread();
+    let Some(panel) = (unsafe { QLPreviewPanel::sharedPreviewPanel(mtm) }) else {
+        return;
+    };
+    if panel.isVisible() {
+        close_image_preview();
+        return;
+    }
+
+    let Some((hash, bytes)) = with_state(|s| {
+        let index = *filtered_indices(s).get(s.selected)?;
+        let clip = s.store.clips.get(index)?;
+        if clip.kind != ClipKind::Image {
+            return None;
+        }
+        let blob = clip.blob.as_deref()?;
+        let bytes = s.store.read_blob(blob)?;
+        Some((clip.hash, bytes))
+    }) else {
+        NSBeep();
+        return;
+    };
+    let Ok(info) = rustclip_imaging::info(&bytes) else {
+        NSBeep();
+        return;
+    };
+    let extension = match info.format {
+        rustclip_imaging::Format::Png => "png",
+        rustclip_imaging::Format::Tiff => "tiff",
+        rustclip_imaging::Format::Jpeg => "jpg",
+    };
+    let Some(path) = write_preview_file(hash, &bytes, extension) else {
+        NSBeep();
+        return;
+    };
+
+    let url =
+        NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&path.to_string_lossy()), false);
+    let delegate = delegate_ref();
+    let source = ProtocolObject::from_ref(&*delegate);
+    unsafe {
+        panel.setDataSource(Some(source));
+        panel.setDelegate(Some(as_any(&*delegate)));
+    }
+    let old = with_state(|s| {
+        let old = s.preview_file.take();
+        s.preview_file = Some(path.clone());
+        s.preview_item = Some(url);
+        old
+    });
+    if let Some(old) = old
+        && old != path
+    {
+        let _ = fs::remove_file(old);
+    }
+
+    unsafe { panel.reloadData() };
+    activate_app();
+    panel.makeKeyAndOrderFront(None);
+}
+
+fn write_preview_file(hash: u64, bytes: &[u8], extension: &str) -> Option<PathBuf> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let dir = thumbnails::ensure_preview_dir().ok()?;
+    let path = dir.join(format!("preview-{hash}.{extension}"));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&path)
+        .ok()?;
+    file.write_all(bytes).ok()?;
+    Some(path)
+}
+
+fn close_image_preview() {
+    if let Some(panel) = preview_panel() {
+        panel.orderOut(None);
+    }
+    finish_closed_preview();
+}
+
+/// Called from the 1 s poll and after ordering the panel out: clean up once the
+/// preview is gone and give the popup its keyboard focus back.
+fn finish_closed_preview() {
+    if !with_state(|s| s.preview_item.is_some()) || preview_is_open() {
+        return;
+    }
+    let mtm = main_thread();
+    let active = NSApplication::sharedApplication(mtm).isActive();
+    let popup_visible = with_state(|s| s.panel.isVisible());
+    if popup_visible {
+        if active {
+            let (panel, search) = with_state(|s| {
+                // Cancel a hide scheduled while Quick Look was taking key.
+                s.hide_token = s.hide_token.wrapping_add(1);
+                (s.panel.clone(), s.search.clone())
+            });
+            panel.makeKeyAndOrderFront(None);
+            panel.makeFirstResponder(Some(&search));
+        } else {
+            hide_panel();
+        }
+    }
+    cleanup_preview();
+}
+
+fn cleanup_preview() {
+    let path = with_state(|s| {
+        s.preview_item = None;
+        s.preview_file.take()
+    });
+    if let Some(path) = path {
+        let _ = fs::remove_file(path);
+    }
+    if let Some(panel) = preview_panel() {
+        unsafe {
+            panel.setDataSource(None);
+            panel.setDelegate(None);
+        }
     }
 }
 

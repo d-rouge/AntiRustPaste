@@ -122,6 +122,19 @@ removed only by an explicit delete or clear action.
 - Captions only, or images plus a title page?
 - Should pinned images sort first in the PDF, or always follow history order?
 
+## Quick Look preview (v0.1)
+
+- Space on the Images tab (empty search) or `⌘Y` opens the selected image in
+  the shared Quick Look panel; Space/Esc closes it and returns focus.
+- The full image is written to a private file under the thumbnail cache and
+  removed when the preview closes or the app quits.
+
+### Remaining
+
+- [ ] Preview text, rich text and image file URLs from the Text tab.
+- [ ] Page through several selected images in one Quick Look session.
+- [ ] Zoom to the source row (Quick Look's zoom animation).
+
 ## Cross-platform notes
 
 - Pinning is a core model/ordering/trim feature; every shell must expose the

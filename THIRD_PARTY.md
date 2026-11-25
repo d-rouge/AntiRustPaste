@@ -9,6 +9,7 @@ dependencies that are not part of the Rust standard library.
 | `objc2-app-kit` | 0.3.2 | MIT OR Apache-2.0 | AppKit bindings |
 | `objc2-foundation` | 0.3.2 | MIT OR Apache-2.0 | Foundation types |
 | `objc2-quartz-core` | 0.3.2 | MIT OR Apache-2.0 | `CALayer` used by the popup |
+| `objc2-quick-look-ui` | 0.3.2 | Zlib OR Apache-2.0 OR MIT | System Quick Look preview panel |
 | `block2` | 0.6.2 | MIT OR Apache-2.0 | Objective-C blocks for timers/monitors |
 | `serde` / `serde_json` | 1.0.x | MIT OR Apache-2.0 | History JSON |
 | `chrono` | 0.4.x | MIT OR Apache-2.0 | Timestamps and relative time |

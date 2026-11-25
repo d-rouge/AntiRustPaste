@@ -17,6 +17,8 @@ are called through small FFI shims.
 - Remembers the app a clipping came from and shows it in the list.
 - Re-copying something already in the history moves it to the top instead of
   duplicating it.
+- Quick Look preview for images: press Space on the Images tab (or `⌘Y`) to
+  open the selected image in the system preview panel, exactly like Finder.
 - Pin clippings with the pin icon on each row (or `⌘P`) to keep them above the
   list and exempt from automatic trimming until explicitly deleted. Pinned rows
   are grouped under a **PINNED** header in their own card, separate from

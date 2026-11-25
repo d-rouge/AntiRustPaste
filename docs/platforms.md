@@ -72,6 +72,7 @@ They depend on core; core never depends on a shell.
 | Thumbnail image loading | ✅ `NSImage` | ⬜ decoder → texture/bitmap | ⬜ decoder → texture/bitmap |
 | Thumbnail cache path | ✅ `/tmp/...` (boot-cleared) | ⬜ `%TEMP%\RustClip` | ⬜ `$XDG_CACHE_HOME`/tmp |
 | Image export to PDF | ✅ `rustclip-pdf` + `NSSavePanel` | ⬜ shell save dialog | ⬜ shell save dialog |
+| Quick Look preview | ✅ `QLPreviewPanel` | ⬜ shell preview | ⬜ shell preview |
 | Tests | ✅ 12 shell + 21 core + 12 imaging + 6 PDF | ⬜ | ⬜ |
 
 Legend: ✅ done, ⬜ not implemented.
@@ -91,6 +92,7 @@ Legend: ✅ done, ⬜ not implemented.
   macOS at boot; one worker thread generates thumbnails.
 - Image export to PDF: a dedicated selection window, one A4 page per image,
   original blobs, Flate-compressed RGB, atomic destination write.
+- Quick Look preview of the selected image with Space (Images tab) or ⌘Y.
 
 Files: `apps/rustclip-macos/src/`.
 

@@ -1,6 +1,6 @@
-# Rules for agents in RustClip
+# Rules for agents in AntiRustPaste
 
-RustClip is a pure-Rust macOS menu-bar clipboard manager. These rules override
+AntiRustPaste is a pure-Rust macOS menu-bar clipboard manager. These rules override
 your tool's defaults. The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY
 are used as in RFC 2119 and RFC 8174. When you depart from a SHOULD, say so and
 why in your handoff.
@@ -37,7 +37,7 @@ only through a reviewed change to this file.
    `docs/behavior.md`, `docs/testing.md`, `docs/platforms.md` and the relevant
    recipe in `docs/agent-playbook.md`.
 7. Check whether an instance is already running before starting one
-   (`pgrep -fl 'RustClip.app/Contents/MacOS/rustclip|target/.*/rustclip'`).
+   (`pgrep -fl 'AntiRustPaste.app/Contents/MacOS/AntiRustPaste|target/.*/rustclip'`).
    Never kill an instance you did not start.
 8. Assume existing files may be the operator's work. Inspect before deleting,
    moving or rewriting. This directory is not always a Git repository; there may
@@ -120,11 +120,11 @@ only through a reviewed change to this file.
     Never test against `~/Library/Application Support/RustClip`, the real
     `com.rustclip.app` defaults, `~/Library/LaunchAgents` or the default
     thumbnail cache.
-22. **Never touch login items with `launchctl`.** RustClip only writes a plist.
+22. **Never touch login items with `launchctl`.** AntiRustPaste only writes a plist.
     Testing "Start at login" is allowed only with `RUSTCLIP_LAUNCH_AGENT_DIR`
     set to a scratch path.
 23. **Never grant or revoke Accessibility for the agent.** Synthesising ⌘V needs
-    the operator to approve RustClip in System Settings. Do not script System
+    the operator to approve AntiRustPaste in System Settings. Do not script System
     Settings or TCC databases. Ask the operator if the permission blocks a test.
 24. **No secrets or personal data** in code, logs, fixtures, test names or
     requests. Report a vulnerability privately to the operator, never in a
@@ -165,7 +165,7 @@ only through a reviewed change to this file.
 
 ## Clean room and licensing
 
-35. RustClip is an independent reimplementation. Do NOT copy another product's
+35. AntiRustPaste is an independent reimplementation. Do NOT copy another product's
     source, assets, icons, sounds or wording. Behaviour notes may guide a
     specification, but code and text MUST be our own.
 36. Do NOT read or port GPL, LGPL or AGPL source. If a dependency's licence is
@@ -216,7 +216,7 @@ crates/rustclip-imaging/         pure-Rust image codec
 - `./scripts/check.sh` — `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
 - `./scripts/smoke.sh` — builds if needed and starts the app with throwaway data paths. Add
   `RUSTCLIP_SMOKE_PREFS=1`, `RUSTCLIP_SMOKE_PANEL=1` or `RUSTCLIP_SMOKE_IMAGES=1` to open a surface.
-- `./make-app.sh` — release build and ad-hoc-signed `dist/RustClip.app`.
+- `./make-app.sh` — release build and ad-hoc-signed `dist/AntiRustPaste.app`.
 
 **Environment overrides**
 

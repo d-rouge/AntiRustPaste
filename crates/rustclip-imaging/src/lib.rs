@@ -21,7 +21,7 @@ pub const MAX_SOURCE_PIXELS: u64 = 32_000_000;
 /// Largest thumbnail edge this crate will produce.
 pub const MAX_THUMBNAIL_EDGE: u32 = 512;
 
-/// Encoded image formats RustClip accepts for thumbnails.
+/// Encoded image formats AntiRustPaste accepts for thumbnails.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     Png,

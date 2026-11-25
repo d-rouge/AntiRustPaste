@@ -13,7 +13,7 @@ signing keys or repository secrets are required: the workflow uses the built-in
 4. Create and push an annotated tag:
 
    ```sh
-   git tag -a v0.1.0 -m "RustClip 0.1.0"
+   git tag -a v0.1.0 -m "AntiRustPaste 0.1.0"
    git push origin v0.1.0
    ```
 
@@ -24,7 +24,7 @@ signing keys or repository secrets are required: the workflow uses the built-in
    - **Build universal app** — installs Rust, runs `./scripts/check.sh`, builds
      with `RUSTCLIP_UNIVERSAL=1 ./make-app.sh`, verifies the bundle version and
      that the binary contains both `arm64` and `x86_64`, then packages
-     `RustClip-<version>-universal.zip`, `RustClip-<version>-universal.dmg` and
+     `AntiRustPaste-<version>-universal.zip`, `AntiRustPaste-<version>-universal.dmg` and
      `SHA256SUMS.txt`.
    - **Publish GitHub release** — creates the release for the tag with the
      generated notes and uploads the three files. If the release already exists,
@@ -45,7 +45,7 @@ signing keys or repository secrets are required: the workflow uses the built-in
 ```sh
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 RUSTCLIP_UNIVERSAL=1 ./make-app.sh
-lipo -archs dist/RustClip.app/Contents/MacOS/rustclip
+lipo -archs dist/AntiRustPaste.app/Contents/MacOS/rustclip
 ```
 
 ## Signing and first launch

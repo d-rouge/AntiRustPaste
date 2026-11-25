@@ -1,8 +1,8 @@
 # Platforms
 
-> Last reviewed: 2026-11-25 · Version 0.1.0
+> Last reviewed: 2026-11-25 · Version 0.1.1
 
-RustClip is structured so the domain works on any desktop OS, while each OS has
+AntiRustPaste is structured so the domain works on any desktop OS, while each OS has
 its own native shell. **Only macOS is implemented today.** Windows and Linux
 have a defined place in the tree and a concrete list of work, but no code yet.
 
@@ -70,7 +70,7 @@ They depend on core; core never depends on a shell.
 | Settings persistence | ✅ `NSUserDefaults` | ⬜ registry or JSON | ⬜ JSON (XDG config) |
 | Start at login | ✅ LaunchAgent | ⬜ Startup folder / Run key | ⬜ XDG autostart `.desktop` |
 | Thumbnail image loading | ✅ `NSImage` | ⬜ decoder → texture/bitmap | ⬜ decoder → texture/bitmap |
-| Thumbnail cache path | ✅ `/tmp/...` (boot-cleared) | ⬜ `%TEMP%\RustClip` | ⬜ `$XDG_CACHE_HOME`/tmp |
+| Thumbnail cache path | ✅ `/tmp/...` (boot-cleared) | ⬜ `%TEMP%\AntiRustPaste` | ⬜ `$XDG_CACHE_HOME`/tmp |
 | Image export to PDF | ✅ `rustclip-pdf` + `NSSavePanel` | ⬜ shell save dialog | ⬜ shell save dialog |
 | Quick Look preview | ✅ `QLPreviewPanel` | ⬜ shell preview | ⬜ shell preview |
 | Tests | ✅ 12 shell + 21 core + 12 imaging + 6 PDF | ⬜ | ⬜ |
@@ -80,7 +80,7 @@ Legend: ✅ done, ⬜ not implemented.
 ## macOS (implemented)
 
 - Menu bar item with the highlighter-and-check template icon (tooltip
-  `RustClip — clipboard history`).
+  `AntiRustPaste — clipboard history`).
 - Left-click toggles the popup; right-click opens the status menu.
 - Popup: search, Text/Images tabs, keyboard navigation, paste, delete, clear.
 - Native pasteboard capture: text, RTF/RTFD, HTML, PNG/TIFF/JPEG images, file
@@ -88,7 +88,7 @@ Legend: ✅ done, ⬜ not implemented.
 - Preferences: max clips, recording, confirmations, login item, shortcut
   recorder, ignored apps, clear thumbnail cache.
 - Global shortcut through Carbon; paste through CGEvent with Accessibility.
-- Thumbnail cache under `/tmp/RustClip-<user>-<hash>/thumbnails`, cleared by
+- Thumbnail cache under `/tmp/AntiRustPaste-<user>-<hash>/thumbnails`, cleared by
   macOS at boot; one worker thread generates thumbnails.
 - Image export to PDF: a dedicated selection window, one A4 page per image,
   original blobs, Flate-compressed RGB, atomic destination write.
@@ -108,7 +108,7 @@ For a new shell, evaluate these in order:
    implementation per OS (macOS already uses `NSPasteboard`).
 2. **`clipboard-rs`** — one MIT-licensed crate for text, HTML, RTF, images, file
    lists, custom types and change notifications; has a Wayland feature. Closest
-   match to RustClip's format matrix. It is younger than `arboard`, so test
+   match to AntiRustPaste's format matrix. It is younger than `arboard`, so test
    hostile formats and each desktop before relying on it.
 3. **`arboard` + `clipboard-master`** — a solid pair for text/images/HTML/file
    lists. `arboard` has no watcher and does not expose RTF; `clipboard-master`
@@ -117,7 +117,7 @@ For a new shell, evaluate these in order:
    It is a reasonable choice if rich text and exact encoded bytes are not
    required.
 
-RustClip's macOS shell deliberately keeps the native API: it needs exact UTIs,
+AntiRustPaste's macOS shell deliberately keeps the native API: it needs exact UTIs,
 RTF/RTFD/HTML/file URLs, concealed-type handling and original encoded bytes.
 `rustclip-core` only sees `Captured`/`Clip`, so a future shell can choose any of
 these without changing storage or UI code.
@@ -137,9 +137,9 @@ Recommended first tasks, in order:
    macOS).
 4. Hot key: `RegisterHotKey`/`WM_HOTKEY`; persist core `Modifiers` to `MOD_*`.
 5. Paste: `SendInput` with Ctrl+V; do not require administrator rights.
-6. Settings: registry (`HKCU\Software\RustClip`) or JSON in `%APPDATA%`.
+6. Settings: registry (`HKCU\Software\AntiRustPaste`) or JSON in `%APPDATA%`.
 7. Login item: Startup folder shortcut or `HKCU\...\Run`.
-8. Thumbnail cache: `%TEMP%\RustClip\thumbnails`, delete on logout/reboot via
+8. Thumbnail cache: `%TEMP%\AntiRustPaste\thumbnails`, delete on logout/reboot via
    the OS or a startup sweep; load PNG into the UI's image type.
 9. Smoke test and docs.
 

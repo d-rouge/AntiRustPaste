@@ -87,12 +87,12 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
-          plist_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' dist/RustClip.app/Contents/Info.plist)"
+          plist_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' dist/AntiRustPaste.app/Contents/Info.plist)"
           if [ "$plist_version" != "$VERSION" ]; then
             echo "::error::bundle version $plist_version does not match $VERSION"
             exit 1
           fi
-          archs="$(lipo -archs dist/RustClip.app/Contents/MacOS/rustclip)"
+          archs="$(lipo -archs dist/AntiRustPaste.app/Contents/MacOS/AntiRustPaste)"
           echo "Architectures: $archs"
           echo "$archs" | grep -q arm64
           echo "$archs" | grep -q x86_64
@@ -103,12 +103,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/release
-          ditto -c -k --keepParent dist/RustClip.app "dist/release/RustClip-$VERSION-universal.zip"
+          ditto -c -k --keepParent dist/AntiRustPaste.app "dist/release/AntiRustPaste-$VERSION-universal.zip"
 
           stage="$(mktemp -d)"
-          cp -R dist/RustClip.app "$stage/RustClip.app"
+          cp -R dist/AntiRustPaste.app "$stage/AntiRustPaste.app"
           ln -s /Applications "$stage/Applications"
-          hdiutil create -quiet -volname "RustClip $VERSION" -srcfolder "$stage" -ov -format UDZO "dist/release/RustClip-$VERSION-universal.dmg"
+          hdiutil create -quiet -volname "AntiRustPaste $VERSION" -srcfolder "$stage" -ov -format UDZO "dist/release/AntiRustPaste-$VERSION-universal.dmg"
           rm -rf "$stage"
 
           (cd dist/release && shasum -a 256 ./* > SHA256SUMS.txt)
@@ -143,7 +143,7 @@ jobs:
         run: |
           set -euo pipefail
           notes="Universal macOS build (Apple Silicon and Intel), macOS 13 or newer.
-          Ad-hoc signed but not notarized: on first launch, right-click RustClip.app
+          Ad-hoc signed but not notarized: on first launch, right-click AntiRustPaste.app
           and choose Open. SHA256SUMS.txt contains the file checksums."
 
           if gh release view "$TAG" >/dev/null 2>&1; then
@@ -152,7 +152,7 @@ jobs:
           else
             gh release create "$TAG" dist/release/* \
               --verify-tag \
-              --title "RustClip $VERSION" \
+              --title "AntiRustPaste $VERSION" \
               --notes "$notes" \
               --generate-notes
           fi

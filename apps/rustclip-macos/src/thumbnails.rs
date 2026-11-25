@@ -14,7 +14,7 @@ use objc2_foundation::NSData;
 use rustclip_core::ThumbnailService;
 
 /// `RUSTCLIP_THUMB_CACHE_DIR` isolates the cache for agents and tests.
-/// Without it, macOS uses `/tmp/RustClip-<user>-<hash>/thumbnails`, which the
+/// Without it, macOS uses `/tmp/AntiRustPaste-<user>-<hash>/thumbnails`, which the
 /// OS clears at boot. Other platforms use the OS temporary directory.
 pub fn cache_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("RUSTCLIP_THUMB_CACHE_DIR")
@@ -35,13 +35,15 @@ fn default_cache_dir() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
         PathBuf::from("/tmp")
-            .join(format!("RustClip-{}", user_key()))
+            .join(format!("AntiRustPaste-{}", user_key()))
             .join("thumbnails")
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        std::env::temp_dir().join("RustClip").join("thumbnails")
+        std::env::temp_dir()
+            .join("AntiRustPaste")
+            .join("thumbnails")
     }
 }
 
@@ -192,7 +194,7 @@ mod tests {
         assert!(!is_safe_cache_dir(Path::new("/tmp")));
         assert!(!is_safe_cache_dir(Path::new("/private/tmp")));
         assert!(!is_safe_cache_dir(Path::new("relative/thumbnails")));
-        assert!(is_safe_cache_dir(Path::new("/tmp/RustClip-user-hash")));
+        assert!(is_safe_cache_dir(Path::new("/tmp/AntiRustPaste-user-hash")));
     }
 
     #[test]

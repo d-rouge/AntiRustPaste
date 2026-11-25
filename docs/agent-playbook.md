@@ -1,14 +1,14 @@
 # Agent playbook
 
-> Last reviewed: 2026-11-25 · Version 0.1.0
+> Last reviewed: 2026-11-25 · Version 0.1.1
 
-Practical recipes for working on RustClip. Read [`../AGENTS.md`](../AGENTS.md)
+Practical recipes for working on AntiRustPaste. Read [`../AGENTS.md`](../AGENTS.md)
 first; this file explains *how*, not what the rules are.
 
 ## Before touching anything
 
 ```sh
-pgrep -fl 'RustClip.app/Contents/MacOS/rustclip|target/.*/rustclip' || true
+pgrep -fl 'AntiRustPaste.app/Contents/MacOS/rustclip|target/.*/rustclip' || true
 git status --short 2>/dev/null || echo "not a git repository"
 ```
 
@@ -208,14 +208,14 @@ An unknown or malformed stored value must fall back to the default, not panic.
 ./scripts/check.sh
 ./make-app.sh
 ./scripts/smoke.sh          # debug binary
-RUSTCLIP_BIN=dist/RustClip.app/Contents/MacOS/rustclip ./scripts/smoke.sh
+RUSTCLIP_BIN=dist/AntiRustPaste.app/Contents/MacOS/rustclip ./scripts/smoke.sh
 ```
 
 `make-app.sh` ad-hoc signs the bundle. Verify:
 
 ```sh
-codesign -dv dist/RustClip.app
-plutil -p dist/RustClip.app/Contents/Info.plist
+codesign -dv dist/AntiRustPaste.app
+plutil -p dist/AntiRustPaste.app/Contents/Info.plist
 ```
 
 Do not copy the bundle to `/Applications` or launch it at login unless the

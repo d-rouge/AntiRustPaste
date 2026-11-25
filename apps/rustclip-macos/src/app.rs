@@ -282,7 +282,7 @@ thread_local! {
 pub(crate) fn with_state<R>(f: impl FnOnce(&mut AppState) -> R) -> R {
     STATE.with(|cell| {
         let mut guard = cell.borrow_mut();
-        let state = guard.as_mut().expect("RustClip state not initialised");
+        let state = guard.as_mut().expect("AntiRustPaste state not initialised");
         f(state)
     })
 }
@@ -312,7 +312,7 @@ pub(crate) fn as_any<T: Message>(obj: &T) -> &AnyObject {
     unsafe { &*(obj as *const T as *const AnyObject) }
 }
 
-/// RustClip never spawns a thread: startup, AppKit delegate callbacks, block
+/// AntiRustPaste never spawns a thread: startup, AppKit delegate callbacks, block
 /// timers and the Carbon hot-key handler all run on the main thread.
 fn main_thread() -> MainThreadMarker {
     // SAFETY: every caller is one of the main-thread entry points listed above.
@@ -815,7 +815,9 @@ fn setup_app() {
             image.setSize(NSSize::new(18.0, 18.0));
             button.setImage(Some(&image));
         }
-        button.setToolTip(Some(&NSString::from_str("RustClip — clipboard history")));
+        button.setToolTip(Some(&NSString::from_str(
+            "AntiRustPaste — clipboard history",
+        )));
         button.sendActionOn(NSEventMask::LeftMouseUp | NSEventMask::RightMouseUp);
         let target = delegate_any();
         unsafe {
@@ -935,8 +937,18 @@ fn build_status_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
         mtm,
     ));
     menu.addItem(&NSMenuItem::separatorItem(mtm));
-    menu.addItem(&menu_item("About RustClip", sel!(showAbout:), &target, mtm));
-    menu.addItem(&menu_item("Quit RustClip", sel!(quitApp:), &target, mtm));
+    menu.addItem(&menu_item(
+        "About AntiRustPaste",
+        sel!(showAbout:),
+        &target,
+        mtm,
+    ));
+    menu.addItem(&menu_item(
+        "Quit AntiRustPaste",
+        sel!(quitApp:),
+        &target,
+        mtm,
+    ));
 
     menu
 }
@@ -2433,7 +2445,7 @@ fn show_about() {
     });
     activate_app();
     let alert = NSAlert::new(mtm);
-    alert.setMessageText(&NSString::from_str("RustClip"));
+    alert.setMessageText(&NSString::from_str("AntiRustPaste"));
     alert.setInformativeText(&NSString::from_str(&format!(
         "Version {}\n\nA pure-Rust clipboard history manager for macOS, inspired by CopyClip.\n\nShortcut: {}\nHistory: {}",
         env!("CARGO_PKG_VERSION"),

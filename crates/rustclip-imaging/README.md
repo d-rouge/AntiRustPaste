@@ -1,6 +1,6 @@
 # rustclip-imaging
 
-Pure-Rust image metadata and thumbnail generation for [RustClip](../../README.md).
+Pure-Rust image metadata and thumbnail generation for [AntiRustPaste](../../README.md).
 
 This crate deliberately has no AppKit, filesystem or environment dependencies:
 

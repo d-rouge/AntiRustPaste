@@ -3,7 +3,7 @@ name = "rustclip-core"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-description = "Platform-neutral clipboard history model and storage for RustClip"
+description = "Platform-neutral clipboard history model and storage for AntiRustPaste"
 license = "MIT OR Apache-2.0"
 publish = false
 

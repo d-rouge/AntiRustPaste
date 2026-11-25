@@ -1,5 +1,5 @@
 #!/bin/bash
-# Start RustClip with throwaway history, preferences and login-item paths.
+# Start AntiRustPaste with throwaway history, preferences and login-item paths.
 #
 # This script never touches the operator's clipboard, history, preferences,
 # LaunchAgents or running processes. It stops only the process it started.
@@ -45,13 +45,13 @@ trap cleanup EXIT
 sleep "${RUSTCLIP_SMOKE_SECONDS:-3}"
 
 if ! kill -0 "$PID" 2>/dev/null; then
-  echo "smoke: RustClip exited unexpectedly" >&2
+  echo "smoke: AntiRustPaste exited unexpectedly" >&2
   cat "$SCRATCH/app.log" >&2
   exit 1
 fi
 
 if grep -q "panicked at" "$SCRATCH/app.log"; then
-  echo "smoke: RustClip logged a panic" >&2
+  echo "smoke: AntiRustPaste logged a panic" >&2
   cat "$SCRATCH/app.log" >&2
   exit 1
 fi

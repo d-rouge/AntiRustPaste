@@ -1,8 +1,8 @@
 # Architecture
 
-> Last reviewed: 2026-11-25 · Version 0.1.0
+> Last reviewed: 2026-11-25 · Version 0.1.1
 
-RustClip is a single-process macOS accessory app. AppKit runs the main loop and
+AntiRustPaste is a single-process macOS accessory app. AppKit runs the main loop and
 a repeating `NSTimer` polls the pasteboard. There is no webview, database engine
 or async runtime. One background worker exists for thumbnails: it reads blobs,
 decodes them with `rustclip-imaging` and writes cache files; it never touches
@@ -131,7 +131,7 @@ draw Images row
 1 s timer
  └── poll_pasteboard
       ├── NSPasteboard::changeCount unchanged? stop
-      ├── remember the frontmost non-RustClip app
+      ├── remember the frontmost non-AntiRustPaste app
       ├── recording disabled? stop
       ├── pasteboard::read_items
       │    ├── skip org.nspasteboard.ConcealedType / TransientType
@@ -165,7 +165,7 @@ list row / Enter / menu item
 
 The target app is captured when the popup opens (or before the status menu is
 shown), not when the paste happens. If the target quit, `resolve_target_app`
-falls back to the last non-RustClip frontmost app by bundle id.
+falls back to the last non-AntiRustPaste frontmost app by bundle id.
 
 ## Popup and preferences
 
@@ -222,13 +222,13 @@ pasteboard PNG/TIFF/JPEG
 ```
 
 - Cache location: an absolute, dedicated `RUSTCLIP_THUMB_CACHE_DIR`, otherwise on macOS
-  `/tmp/RustClip-<user>-<hash>/thumbnails`. macOS clears `/tmp` at boot, so this
+  `/tmp/AntiRustPaste-<user>-<hash>/thumbnails`. macOS clears `/tmp` at boot, so this
   guarantees the cache is gone after a reboot. Other platforms use the OS temp
   directory. For the default location the directory and its parent are private
   (`0700`) and files are `0600` on Unix.
 - Thumbnails are never stored in `history.json`; the original blob is the source
   of truth. Deleting the cache is safe and is exposed as **Clear Thumbnail
-  Cache** in Preferences. A legacy cache under `<OS temp>/RustClip/thumbnails` is
+  Cache** in Preferences. A legacy cache under `<OS temp>/AntiRustPaste/thumbnails` is
   removed once at startup.
 - `thumbnails::prune_now` removes files whose hash is no longer in the history
   at startup (synchronously, before the worker starts). `ThumbnailService::prune`
@@ -315,9 +315,9 @@ QLPreviewPanel
 
 ## Storage
 
-`rustclip_core::Store` uses `dirs::data_dir()/RustClip` by default, so each shell
+`rustclip_core::Store` uses `dirs::data_dir()/AntiRustPaste` by default, so each shell
 gets its platform data directory: on macOS `~/Library/Application
-Support/RustClip/`, Windows `%APPDATA%\RustClip\`, Linux
+Support/AntiRustPaste/`, Windows `%APPDATA%\AntiRustPaste\`, Linux
 `$XDG_DATA_HOME/rustclip/` (or the platform equivalent). `RUSTCLIP_DATA_DIR`
 overrides it.
 

@@ -1,4 +1,4 @@
-//! RustClip — macOS AppKit shell.
+//! AntiRustPaste — macOS AppKit shell.
 //!
 //! Domain logic and storage live in `rustclip-core`; this binary owns the menu
 //! bar item, popup, native clipboard, Carbon hot key, CoreGraphics paste and
@@ -13,7 +13,7 @@ mod thumbnails;
 mod views;
 
 const HELP: &str = "\
-RustClip — clipboard history in the menu bar.
+AntiRustPaste — clipboard history in the menu bar.
 
 Usage: rustclip [--help | --version]
 

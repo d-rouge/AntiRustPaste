@@ -1,4 +1,4 @@
-//! Platform-neutral RustClip domain.
+//! Platform-neutral AntiRustPaste domain.
 //!
 //! Nothing in this crate may depend on AppKit, Win32, GTK or another UI
 //! framework. Platform shells (`apps/rustclip-*`) own tray icons, popups,

@@ -1,6 +1,6 @@
 # Third-party dependencies
 
-RustClip is MIT/Apache-2.0 licensed. The crates below are the only direct
+AntiRustPaste is MIT/Apache-2.0 licensed. The crates below are the only direct
 dependencies that are not part of the Rust standard library.
 
 | Crate | Version | Licence | Used for |

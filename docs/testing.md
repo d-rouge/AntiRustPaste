@@ -1,8 +1,8 @@
 # Testing
 
-> Last reviewed: 2026-11-25 · Version 0.1.0
+> Last reviewed: 2026-11-25 · Version 0.1.1
 
-RustClip is a macOS GUI app, but most of its logic is testable without a screen.
+AntiRustPaste is a macOS GUI app, but most of its logic is testable without a screen.
 The goal is deterministic local checks, with a small, explicit manual matrix for
 AppKit behaviour.
 
@@ -146,7 +146,7 @@ crash fix.
 | Malformed `ignoredApps` JSON in defaults | Treated as an empty list |
 | Negative/huge `maxClips` in defaults | Clamped to 1–9999 at load |
 | Hot-key combination already registered | Recording fails with an alert; old shortcut restored |
-| Target app quits between opening the popup and pasting | Falls back to the last non-RustClip app |
+| Target app quits between opening the popup and pasting | Falls back to the last non-AntiRustPaste app |
 | Accessibility denied | Clipboard updated, no keystroke, no crash |
 | Second instance starts | No shared-memory corruption; hot key may fail to register |
 | Quit while a paste timer is pending | Timer is invalidated with the process; no crash |
@@ -161,7 +161,7 @@ crash fix.
 - Prefer an absolute, dedicated `RUSTCLIP_THUMB_CACHE_DIR` pointing at a scratch
   directory; the cache contains private images. Root/temp-root/home and relative
   paths are ignored. Without the override macOS uses
-  `/tmp/RustClip-<user>-<hash>/thumbnails`, which is boot-cleared but still
+  `/tmp/AntiRustPaste-<user>-<hash>/thumbnails`, which is boot-cleared but still
   readable by the current user during the session.
 - Never grant or revoke Accessibility, or edit TCC.
 - Never use the operator's clipboard contents as a fixture. Use synthetic text.

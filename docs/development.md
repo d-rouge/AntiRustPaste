@@ -1,6 +1,6 @@
 # Development
 
-> Last reviewed: 2026-11-25 · Version 0.1.0
+> Last reviewed: 2026-11-25 · Version 0.1.1
 
 ## Prerequisites
 
@@ -21,7 +21,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ./scripts/check.sh                # fmt + clippy + workspace tests
 ./scripts/smoke.sh                # isolated 3 s launch, checks for panics
-./make-app.sh                     # release bundle in dist/RustClip.app
+./make-app.sh                     # release bundle in dist/AntiRustPaste.app
 ```
 
 The workspace has four packages:
@@ -63,7 +63,7 @@ only its own process and removes its scratch directory on success.
 | `RUSTCLIP_DATA_DIR` | History directory | `~/Library/Application Support/RustClip` |
 | `RUSTCLIP_DEFAULTS_SUITE` | `NSUserDefaults` suite | bundle/process domain |
 | `RUSTCLIP_LAUNCH_AGENT_DIR` | Login-item plist directory | `~/Library/LaunchAgents` |
-| `RUSTCLIP_THUMB_CACHE_DIR` | Absolute, dedicated thumbnail cache | `/tmp/RustClip-<user>-<hash>/thumbnails` (boot-cleared on macOS) |
+| `RUSTCLIP_THUMB_CACHE_DIR` | Absolute, dedicated thumbnail cache | `/tmp/AntiRustPaste-<user>-<hash>/thumbnails` (boot-cleared on macOS) |
 | `RUSTCLIP_OPEN_PREFS=1` | Open Preferences at launch | off |
 | `RUSTCLIP_OPEN_PANEL=1` | Open the popup at launch | off |
 | `RUSTCLIP_OPEN_IMAGES=1` | Start the popup on Images | off |
@@ -77,7 +77,7 @@ Images tab in the isolated launch.
 
 ## Permissions
 
-RustClip writes the chosen clip to the pasteboard without asking for anything.
+AntiRustPaste writes the chosen clip to the pasteboard without asking for anything.
 To send the synthetic ⌘V it needs **System Settings → Privacy & Security →
 Accessibility**. The first paste attempt triggers the system prompt. If access is
 denied:
@@ -90,10 +90,16 @@ Agents MUST NOT grant, revoke or script this permission. Ask the operator.
 
 ## Bundle and release
 
+The shipped dictionary, data directory and environment variables keep their
+original identifiers for compatibility: the bundle id is `com.rustclip.app`,
+history lives in `~/Library/Application Support/RustClip`, and the overrides are
+`RUSTCLIP_*`. Only the product and bundle name are AntiRustPaste, so existing
+histories, preferences and the Accessibility grant survive the rename.
+
 `./make-app.sh`:
 
 1. builds `--release` (LTO, size optimisation);
-2. creates `dist/RustClip.app/Contents/MacOS/rustclip`;
+2. creates `dist/AntiRustPaste.app/Contents/MacOS/rustclip`;
 3. copies `packaging/Info.plist` and sets `CFBundleShortVersionString` from
    `Cargo.toml`;
 4. ad-hoc signs the bundle (`codesign --force --sign -`).
@@ -114,7 +120,7 @@ The bundle declares `LSUIElement=true`, `CFBundleIdentifier=com.rustclip.app`,
 keeps the bundle valid and gives Accessibility a stable identity per build; a
 rebuilt binary may need the permission re-approved.
 
-To install: copy `dist/RustClip.app` to `/Applications`. Moving the app after
+To install: copy `dist/AntiRustPaste.app` to `/Applications`. Moving the app after
 enabling "Start at login" leaves the old LaunchAgent path until the app is
 launched again, which rewrites the plist.
 
@@ -126,7 +132,7 @@ launched again, which rewrites the plist.
   frames and map them to `apps/rustclip-macos/src/app.rs`, `views.rs`,
   `hotkey.rs` or `paste.rs`.
 - Set `RUST_BACKTRACE=1` when running a debug build to see the Rust side.
-- `log stream --process rustclip` shows system messages; RustClip only writes to
+- `log stream --process rustclip` shows system messages; AntiRustPaste only writes to
   stderr.
 - To check the event path without Accessibility, test that the clipboard content
   changes and the target app is activated; the synthetic key is the last step.

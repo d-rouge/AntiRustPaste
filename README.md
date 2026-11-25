@@ -1,4 +1,4 @@
-# RustClip
+# AntiRustPaste
 
 A clipboard history manager for macOS, written entirely in Rust and inspired by
 [CopyClip](https://fiplab.com/apps/copyclip-for-mac). No Swift or Objective-C
@@ -41,11 +41,22 @@ are called through small FFI shims.
 - History limit from 1 to 9999 clippings (200 by default).
 - Start at login through a per-user LaunchAgent.
 
+## Download
+
+Grab the latest universal build from the
+[releases page](https://github.com/d-rouge/AntiRustPaste/releases/latest). The
+`.dmg`, `.zip` and `SHA256SUMS.txt` are **assets of a release** (Releases → a
+version → Assets); the repository's *Packages* section is for package
+registries and stays empty.
+
+The build is ad-hoc signed but not notarized: on first launch, right-click
+**AntiRustPaste.app** and choose **Open**.
+
 ## Requirements
 
 - macOS 13 or newer.
 - A Rust toolchain (edition 2024, Rust 1.88+; required by the imaging crate).
-- The Accessibility permission, granted the first time RustClip tries to paste
+- The Accessibility permission, granted the first time AntiRustPaste tries to paste
   for you (System Settings → Privacy & Security → Accessibility).
 
 ## Documentation
@@ -73,10 +84,10 @@ For a real app bundle:
 
 ```sh
 ./make-app.sh
-open dist/RustClip.app
+open dist/AntiRustPaste.app
 ```
 
-To keep it around, copy `dist/RustClip.app` to `/Applications`.
+To keep it around, copy `dist/AntiRustPaste.app` to `/Applications`.
 
 Because it is an accessory app, there is no Dock icon: look for the clipboard
 symbol in the menu bar. Left-click opens the history, right-click opens the
@@ -129,7 +140,7 @@ location is used instead. `RUSTCLIP_OPEN_PREFS=1`, `RUSTCLIP_OPEN_PANEL=1` and
 ```
 ~/Library/Application Support/RustClip/history.json   # index
 ~/Library/Application Support/RustClip/blobs/*.bin    # images / RTF / HTML
-/tmp/RustClip-<user>-<hash>/thumbnails/thumb-*.png     # macOS, boot-cleared
+/tmp/AntiRustPaste-<user>-<hash>/thumbnails/thumb-*.png     # macOS, boot-cleared
 ```
 
 The index is plain JSON and binary clips live in separate files, so pruning and
@@ -184,7 +195,7 @@ crates/rustclip-imaging/    pure-Rust image metadata and thumbnails
 
 - Carbon's hot key API is deprecated for UI but is still the supported way to
   register a system-wide shortcut without Accessibility access.
-- Pasting needs Accessibility because RustClip sends a synthetic ⌘V to the app
+- Pasting needs Accessibility because AntiRustPaste sends a synthetic ⌘V to the app
   that was frontmost when the popup opened.
 - Panics in AppKit, timer and Carbon callbacks are caught and logged rather than
   being allowed to abort the process.

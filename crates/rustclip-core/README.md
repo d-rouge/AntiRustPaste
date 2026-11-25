@@ -1,6 +1,6 @@
 # rustclip-core
 
-Platform-neutral domain for RustClip. This crate must not depend on AppKit,
+Platform-neutral domain for AntiRustPaste. This crate must not depend on AppKit,
 Win32, GTK or a UI toolkit.
 
 It owns:

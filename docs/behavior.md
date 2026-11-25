@@ -1,14 +1,14 @@
 # Behaviour specification
 
-> Last reviewed: 2026-11-25 · Version 0.1.0
+> Last reviewed: 2026-11-25 · Version 0.1.1
 
 This is the contract the app implements and the clean-room specification agents
-may use. Code, labels and assets are RustClip's own; no CopyClip source or
+may use. Code, labels and assets are AntiRustPaste's own; no CopyClip source or
 assets are used.
 
 ## 1. Lifecycle
 
-- RustClip launches as a menu-bar accessory (`LSUIElement`, activation policy
+- AntiRustPaste launches as a menu-bar accessory (`LSUIElement`, activation policy
   `.accessory`). It has no Dock icon and no main window at startup.
 - A highlighter-and-check template icon appears in the status bar.
 - Left-click the symbol: toggle the history popup.
@@ -42,7 +42,7 @@ Rules:
 - If recording is disabled, changes update the internal counter but are not
   inserted. Re-enabling recording starts from the then-current change count.
 - A change whose source app is in the ignored list is skipped. The source is the
-  last frontmost application that was not RustClip at poll time.
+  last frontmost application that was not AntiRustPaste at poll time.
 - Duplicate content (same kind, text, data type and bytes) is not appended.
   The existing entry moves to the top.
 - The history is trimmed to the configured maximum (default 200, range 1–9999).
@@ -122,7 +122,7 @@ key.
 2. The new `changeCount` is recorded so the write is not captured again.
 3. The popup hides.
 4. The app that was frontmost when the popup opened is activated. If it quit,
-   the last non-RustClip frontmost app is used.
+   the last non-AntiRustPaste frontmost app is used.
 5. On the first paste attempt the app asks for Accessibility trust.
 6. After 0.25 s a synthetic ⌘V down/up is posted. Without Accessibility the
    clipboard still contains the clip and the user can paste manually.
@@ -134,8 +134,8 @@ key.
   beeps and explains that at least one image is needed.
 - **Clear All Clippings** asks for confirmation when enabled, then clears the
   index, every text/image blob and the thumbnail cache (including pending jobs).
-- **About RustClip** shows version, shortcut and history path.
-- **Quit RustClip** terminates the app.
+- **About AntiRustPaste** shows version, shortcut and history path.
+- **Quit AntiRustPaste** terminates the app.
 
 ## 8. Export images to PDF
 
@@ -192,7 +192,7 @@ written.
 - **Record clipboard history** — when off, no new clips are stored.
 - **Confirm before deleting** — gates row deletion, clear-all and limit
   reduction.
-- **Start RustClip at login** — writes/removes the LaunchAgent plist. Failure
+- **Start AntiRustPaste at login** — writes/removes the LaunchAgent plist. Failure
   restores the switch and shows an alert.
 - **Global shortcut** — click the button, then press a combination with at least
   Command, Option or Control. Escape cancels. The old shortcut is suspended while
@@ -230,7 +230,7 @@ be undone. The status menu's
   the configured maximum applies to unpinned clips. Re-copying a pinned clip
   keeps it pinned. Explicit delete/section clear/clear-all removes pinned clips.
 - Thumbnails live outside the history, in `RUSTCLIP_THUMB_CACHE_DIR` or, by
-  default on macOS, `/tmp/RustClip-<user>-<hash>/thumbnails`. macOS clears
+  default on macOS, `/tmp/AntiRustPaste-<user>-<hash>/thumbnails`. macOS clears
   `/tmp` at boot; the **Clear Thumbnail Cache** button deletes existing previews
   immediately and queues cleanup for in-flight jobs.
 - Preferences use `NSUserDefaults`.

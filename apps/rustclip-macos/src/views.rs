@@ -1367,7 +1367,7 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
             false,
         )
     };
-    window.setTitle(&NSString::from_str("RustClip Preferences"));
+    window.setTitle(&NSString::from_str("AntiRustPaste Preferences"));
     unsafe { window.setReleasedWhenClosed(false) };
     window.center();
     window.setBackgroundColor(Some(&NSColor::windowBackgroundColor()));
@@ -1458,7 +1458,7 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
 
     let login_box = unsafe {
         NSButton::checkboxWithTitle_target_action(
-            &NSString::from_str("Start RustClip at login"),
+            &NSString::from_str("Start AntiRustPaste at login"),
             Some(target),
             Some(sel!(startAtLoginToggled:)),
             mtm,

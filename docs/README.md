@@ -1,6 +1,6 @@
 # Documentation
 
-RustClip's docs are split by audience. Read the first two before changing code.
+AntiRustPaste's docs are split by audience. Read the first two before changing code.
 
 | Document | Audience | What it covers |
 | --- | --- | --- |
@@ -22,10 +22,10 @@ agent rules are in [`../AGENTS.md`](../AGENTS.md). Tool-specific entry points
 The user-facing overview, requirements and keyboard map live in
 [`../README.md`](../README.md).
 
-## Current status (0.1.0)
+## Current status (0.1.1)
 
-Structure: workspace with `apps/rustclip-macos`, `crates/rustclip-core` and
-`crates/rustclip-imaging`. Only macOS is implemented; see
+Structure: workspace with `apps/rustclip-macos`, `crates/rustclip-core`,
+`crates/rustclip-imaging` and `crates/rustclip-pdf`. Only macOS is implemented; see
 [platforms.md](platforms.md).
 
 Working: menu-bar app, text/RTF/HTML/image/file capture, Text/Images tabs,

@@ -151,7 +151,7 @@ This is the first storage task for a 1.0 release.
 `crates/rustclip-imaging`; keep AppKit loading and cache policy in the app.
 
 **Why.** Thumbnail generation must work outside macOS, and the logic is reusable
-without any RustClip UI. The crate can enforce portability with
+without any AntiRustPaste UI. The crate can enforce portability with
 `#![forbid(unsafe_code)]`, has no AppKit/filesystem/environment dependencies and
 is tested independently. This follows the LightCraft rule that reusable codecs
 and parsers live in a shared library while app-specific policy stays in the app.
@@ -165,13 +165,13 @@ portability), ImageIO/CoreGraphics (macOS-only), hand-written decoders (too much
 risk for hostile input).
 
 **Trade-off.** A workspace and one dependency. If the imaging crate later needs
-to serve only RustClip again, folding it back into `rustclip-core`/the shell is mechanical because
+to serve only AntiRustPaste again, folding it back into `rustclip-core`/the shell is mechanical because
 its API is two functions.
 
 ## ADR-011: A disposable thumbnail cache outside the history
 
 **Decision.** Store encoded thumbnails in `RUSTCLIP_THUMB_CACHE_DIR` or, by
-default on macOS, `/tmp/RustClip-<user>-<hash>/thumbnails`, never in
+default on macOS, `/tmp/AntiRustPaste-<user>-<hash>/thumbnails`, never in
 `history.json`. Prune by hash; expose **Clear Thumbnail Cache** in Preferences.
 
 **Why.** Thumbnails are regenerable and much smaller than originals; keeping them
@@ -179,7 +179,7 @@ out of the history avoids schema changes, keeps saves small, and makes clearing
 safe. macOS clears `/tmp` at boot, which gives the operator the requested
 guarantee that no previews survive a reboot. The per-user subdirectory and
 `0700`/`0600` permissions keep clipboard images private. A legacy cache under
-`<OS temp>/RustClip/thumbnails` is removed once at startup.
+`<OS temp>/AntiRustPaste/thumbnails` is removed once at startup.
 
 **Alternatives.** A durable cache under `~/Library/Caches` (survives more, but
 the operator asked for temporary), thumbnails inside the history (rewrites and

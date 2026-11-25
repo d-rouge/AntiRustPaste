@@ -1,11 +1,11 @@
 #!/bin/bash
-# Build RustClip and assemble a normal macOS .app bundle in dist/.
+# Build AntiRustPaste and assemble a normal macOS .app bundle in dist/.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' apps/rustclip-macos/Cargo.toml | head -n1)
-APP="dist/RustClip.app"
+APP="dist/AntiRustPaste.app"
 UNIVERSAL="${RUSTCLIP_UNIVERSAL:-0}"
 
 if [ "$UNIVERSAL" = "1" ]; then
@@ -30,12 +30,12 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 if [ "$UNIVERSAL" = "1" ]; then
   lipo -create \
-    -output "$APP/Contents/MacOS/rustclip" \
+    -output "$APP/Contents/MacOS/AntiRustPaste" \
     target/aarch64-apple-darwin/release/rustclip \
     target/x86_64-apple-darwin/release/rustclip
-  echo "Architectures: $(lipo -archs "$APP/Contents/MacOS/rustclip")"
+  echo "Architectures: $(lipo -archs "$APP/Contents/MacOS/AntiRustPaste")"
 else
-  cp target/release/rustclip "$APP/Contents/MacOS/rustclip"
+  cp target/release/rustclip "$APP/Contents/MacOS/AntiRustPaste"
 fi
 cp packaging/Info.plist "$APP/Contents/Info.plist"
 cp assets/app-icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"

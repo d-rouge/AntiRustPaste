@@ -26,6 +26,7 @@ crates/
     src/filter.rs                Section and search filtering
     src/thumbnails.rs            cache worker, jobs, prune, clear
   rustclip-imaging/              pure-Rust image metadata + thumbnails
+  rustclip-pdf/                  pure-Rust image-to-PDF writer
 ```
 
 Future shells are added as `apps/rustclip-windows` and `apps/rustclip-linux`.
@@ -38,7 +39,10 @@ They depend on core; core never depends on a shell.
    `chrono`, `uuid`, `dirs` and `rustclip-imaging`.
 2. `rustclip-imaging` MUST NOT depend on a UI toolkit, filesystem or environment
    variables. It has `#![forbid(unsafe_code)]`.
-3. A platform shell owns:
+3. `rustclip-pdf` MUST NOT depend on a UI toolkit, filesystem or environment
+   variables. It takes encoded image bytes and returns PDF bytes, and keeps
+   `#![forbid(unsafe_code)]`.
+4. A platform shell owns:
    - tray icon / menu bar item;
    - popup window and its activation, focus, resign and positioning rules;
    - native clipboard read/write and change notification;
@@ -46,10 +50,10 @@ They depend on core; core never depends on a shell.
    - synthetic paste and Accessibility/permission prompts;
    - settings persistence and login-item installation;
    - the thumbnail cache directory and native image type (e.g. `NSImage`).
-4. Core owns the data contract: `Captured`, `Clip`, `ClipKind`, `Store`,
+5. Core owns the data contract: `Captured`, `Clip`, `ClipKind`, `Store`,
    `Settings`, `IgnoredApp`, `Modifiers`, `Section`, filtering and the
    thumbnail generation worker.
-5. The core settings model uses platform-neutral `Modifiers` bits
+6. The core settings model uses platform-neutral `Modifiers` bits
    (`SHIFT=1`, `CONTROL=2`, `OPTION=4`, `COMMAND=8`). Each shell converts to and
    from its native modifier mask. macOS also migrates old `NSEvent` values.
 
@@ -67,7 +71,8 @@ They depend on core; core never depends on a shell.
 | Start at login | ✅ LaunchAgent | ⬜ Startup folder / Run key | ⬜ XDG autostart `.desktop` |
 | Thumbnail image loading | ✅ `NSImage` | ⬜ decoder → texture/bitmap | ⬜ decoder → texture/bitmap |
 | Thumbnail cache path | ✅ `/tmp/...` (boot-cleared) | ⬜ `%TEMP%\RustClip` | ⬜ `$XDG_CACHE_HOME`/tmp |
-| Tests | ✅ 5 shell + 21 core + 10 imaging | ⬜ | ⬜ |
+| Image export to PDF | ✅ `rustclip-pdf` + `NSSavePanel` | ⬜ shell save dialog | ⬜ shell save dialog |
+| Tests | ✅ 7 shell + 21 core + 12 imaging + 5 PDF | ⬜ | ⬜ |
 
 Legend: ✅ done, ⬜ not implemented.
 
@@ -84,11 +89,14 @@ Legend: ✅ done, ⬜ not implemented.
 - Global shortcut through Carbon; paste through CGEvent with Accessibility.
 - Thumbnail cache under `/tmp/RustClip-<user>-<hash>/thumbnails`, cleared by
   macOS at boot; one worker thread generates thumbnails.
+- Image export to PDF: a dedicated selection window, one A4 page per image,
+  original blobs, Flate-compressed RGB, atomic destination write.
 
 Files: `apps/rustclip-macos/src/`.
 
 Known macOS gaps: no per-row accessibility elements in the hand-drawn list, no
-image grid, EXIF orientation is not applied, no encryption at rest.
+image grid, EXIF orientation is not applied, no encryption at rest, PDF export
+has no reordering, page options or progress indicator.
 
 ## Clipboard backend candidates
 

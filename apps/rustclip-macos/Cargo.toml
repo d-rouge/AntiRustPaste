@@ -15,4 +15,5 @@ objc2-foundation = "0.3.2"
 objc2-quartz-core = { version = "0.3.2", features = ["CALayer"] }
 rustclip-core = { path = "../../crates/rustclip-core" }
 rustclip-imaging = { path = "../../crates/rustclip-imaging" }
+rustclip-pdf = { path = "../../crates/rustclip-pdf" }
 serde_json = "1.0.154"

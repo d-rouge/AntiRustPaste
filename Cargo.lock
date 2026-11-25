@@ -590,6 +590,7 @@ dependencies = [
  "objc2-quartz-core",
  "rustclip-core",
  "rustclip-imaging",
+ "rustclip-pdf",
  "serde_json",
 ]
 
@@ -610,6 +611,14 @@ name = "rustclip-imaging"
 version = "0.1.0"
 dependencies = [
  "image",
+]
+
+[[package]]
+name = "rustclip-pdf"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "rustclip-imaging",
 ]
 
 [[package]]

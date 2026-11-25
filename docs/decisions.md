@@ -263,3 +263,27 @@ removes pinned clips; pinning protects only against automatic eviction.
 **Trade-off.** The history can exceed the configured maximum when many clips are
 pinned. This is intentional and visible in the row count; the alternative
 (evicting pinned clips) defeats the feature.
+
+## ADR-016: Write the PDF container in-house instead of using `printpdf`
+
+**Decision.** `crates/rustclip-pdf` writes the PDF catalogue, page tree, content
+streams and image XObjects itself, using `rustclip-imaging` for decoding and
+`flate2` for compression.
+
+**Why.** `printpdf` 0.12 pulls in 104 crates for a job that only needs image
+embedding: its default feature set includes the Azul text layout stack,
+`allsorts` fonts, `pathfinder`, encryption primitives, Brotli and fax decoding.
+The export needs none of that. A small writer keeps the dependency surface
+reviewable, stays pure Rust, and gives byte-level tests: page count, object
+offsets, image dimensions and the upright transform are all asserted in unit
+tests. The output was also rendered with PDFKit during development to confirm
+A4 size, margins, colour and orientation.
+
+**Trade-off.** We own the container code and must keep it inside what PDF
+readers accept (no compression of text objects, no linearisation, no metadata
+streams). New page/layout features require changes in our writer rather than a
+library call.
+
+**Validation.** `cargo test -p rustclip-pdf` checks the header, trailer,
+`startxref` offsets, one `/Type /Page` per image, `/FlateDecode` streams, and
+that the content matrix negates the height so rows are not upside down.

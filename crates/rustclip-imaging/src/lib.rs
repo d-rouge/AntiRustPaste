@@ -46,6 +46,17 @@ pub struct Thumbnail {
     pub png: Vec<u8>,
 }
 
+/// A decoded image as tightly packed 8-bit RGB samples, top row first.
+///
+/// Transparency is composited onto white so the samples can be embedded in a
+/// PDF page without an alpha channel.
+#[derive(Clone, Debug)]
+pub struct Rgb {
+    pub width: u32,
+    pub height: u32,
+    pub samples: Vec<u8>,
+}
+
 /// Failure modes for metadata and thumbnail generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -129,6 +140,42 @@ pub fn thumbnail_png(bytes: &[u8], max_edge: u32) -> Result<Thumbnail, Error> {
         width: resized.width(),
         height: resized.height(),
         png,
+    })
+}
+
+/// Decode an image to RGB samples for export.
+///
+/// Dimensions are bounded by [`MAX_SOURCE_PIXELS`]; alpha is composited onto
+/// white. The caller decides where the result is written.
+pub fn decode_rgb(bytes: &[u8]) -> Result<Rgb, Error> {
+    let info = info(bytes)?;
+    let reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| Error::UnsupportedFormat)?;
+    let decoded = reader.decode().map_err(|_| Error::Decode)?;
+    if decoded.width() != info.width || decoded.height() != info.height {
+        return Err(Error::Decode);
+    }
+
+    let rgba = decoded.into_rgba8();
+    let capacity = (info.width as usize)
+        .saturating_mul(info.height as usize)
+        .saturating_mul(3);
+    let mut samples = Vec::with_capacity(capacity);
+    for pixel in rgba.pixels() {
+        let [red, green, blue, alpha] = pixel.0;
+        let alpha = alpha as u32;
+        let white = 255 * (255 - alpha);
+        for channel in [red, green, blue] {
+            let value = (channel as u32).saturating_mul(alpha).saturating_add(white) / 255;
+            samples.push(value as u8);
+        }
+    }
+
+    Ok(Rgb {
+        width: info.width,
+        height: info.height,
+        samples,
     })
 }
 
@@ -221,6 +268,27 @@ mod tests {
         let bytes = encoded(11, 8, ImageFormat::Png);
         let thumb = thumbnail_png(&bytes, 128).expect("thumbnail");
         assert_eq!((thumb.width, thumb.height), (11, 8));
+    }
+
+    #[test]
+    fn decodes_rgb_and_composites_alpha_onto_white() {
+        let opaque = encoded(4, 3, ImageFormat::Png);
+        let rgb = decode_rgb(&opaque).expect("rgb");
+        assert_eq!((rgb.width, rgb.height), (4, 3));
+        assert_eq!(rgb.samples.len(), 4 * 3 * 3);
+
+        let transparent = RgbaImage::from_pixel(1, 1, Rgba([255, 0, 0, 128]));
+        let mut bytes = Vec::new();
+        transparent
+            .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
+            .expect("encode transparent fixture");
+        let rgb = decode_rgb(&bytes).expect("rgb");
+        assert_eq!(rgb.samples, vec![255, 127, 127]);
+    }
+
+    #[test]
+    fn rejects_non_image_bytes_for_export() {
+        assert!(decode_rgb(b"not an image").is_err());
     }
 
     #[test]

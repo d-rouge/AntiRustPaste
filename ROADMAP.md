@@ -67,72 +67,56 @@ removed only by an explicit delete or clear action.
 
 - Maximum count: should pinned clips be excluded from the limit (recommended)
   or count against it while being protected from eviction?
-- Should pinning be available from the popup footer, a row button, or only a
-  context menu? Keep the first implementation to context menu + shortcut.
+- Should pinning also be available from a row context menu? The row pin icon
+  and `⌘P` are the current entry points.
 - Do we need manual ordering inside the pinned group, or is newest-first enough?
 
-## Planned: export selected images to PDF
+## Image export to PDF (v0.1)
 
-### Goal
+### Implemented
 
-Give the operator a dedicated place to select copied images, order them, and
-write a PDF to a location they choose.
+- Entry points: the **PDF…** footer button on the Images tab, **Export Images to
+  PDF…** in the status menu, and `⌘E` while the popup is open.
+- A dedicated export window lists image clips in history order with checkboxes,
+  **Select All** (⌘A), **Select None** (⌘D), **Save PDF…** (⌘S) and
+  **Cancel**/esc.
+- The system save dialog (`NSSavePanel`) writes the file; the default name is
+  `Clipboard Images.pdf`.
+- `crates/rustclip-pdf` is a pure-Rust, `#![forbid(unsafe_code)]` writer: one A4
+  page per image, 12 mm margins, aspect ratio preserved, original blobs decoded
+  through `rustclip-imaging`, RGB samples compressed with Flate.
+- The PDF is written to `<name>.pdf.tmp` and renamed into place; cancelling the
+  dialog or a failure leaves no partial file.
+- Unit tests cover the container, cross-reference offsets, page count, upright
+  image transform and the atomic destination write.
 
-### UX to implement
+### Remaining
 
-- Entry point from the Images section and the status menu, e.g. **Export
-  Images to PDF…**.
-- A dedicated selection environment (separate window or modal sheet) showing a
-  grid of image thumbnails with:
-  - checkboxes / multi-selection;
-  - Select All and Clear Selection;
-  - drag or buttons to reorder the selected images;
-  - a preview of page order;
-  - page size (A4/Letter), orientation (automatic/portrait/landscape) and
-    margin;
-  - layout choice: one image per page (default) or a simple grid;
-  - **Save PDF…** using `NSSavePanel`/native save dialog.
-- The PDF uses the original image blobs, not the thumbnail cache. Show a
-  progress indicator and keep the UI responsive for large images.
-- Cancel leaves no partial file. A failed write reports the error and keeps the
-  selection.
-- Never log image contents or the chosen path; do not silently write to a
-  hidden location.
-
-### Architecture
-
-- Add `crates/rustclip-pdf` as a pure-Rust library that accepts selected PNG
-  bytes, dimensions, page settings and an output writer. It must not depend on
-  AppKit and should be unit-testable with small fixtures.
-- The platform shell owns the selection window, drag/reorder state, save
-  dialog, progress and permission/security-scoped handling.
-- Core/store only supplies image clips and blob paths; PDF generation does not
-  change history or thumbnails.
-- Evaluate `printpdf`/`pdf-writer` for the PDF container and image embedding;
-  check licence and MSRV before adding. Alternative for a first macOS-only cut:
-  CoreGraphics/PDFKit via `objc2`, but that does not advance the cross-platform
-  architecture and should be avoided if a permissive pure-Rust crate fits.
+- [ ] Drag or button reordering of the selected images.
+- [ ] Page size (A4/Letter), orientation and margin options.
+- [ ] Progress indicator and off-main-thread encoding (a second worker thread
+      needs the operator's approval).
+- [ ] Downsampling very large images to keep PDFs small.
+- [ ] EXIF orientation.
+- [ ] Optional captions with source app and date.
+- [ ] Include image file URLs that currently live in the Text tab.
 
 ### Acceptance checks
 
-- [ ] Select 3 images, reorder them, save a PDF: pages are in the chosen order
-      and the file opens in Preview.
-- [ ] Images are embedded from the original blobs, not the 128 px thumbnails.
-- [ ] Cancelling the save dialog leaves no file.
-- [ ] Large images show progress and do not freeze the popup.
-- [ ] An unreadable/missing blob reports an error and skips that image or
-      aborts with a clear message (decide and test one).
-- [ ] PDF generation works without the app UI (library test) and on every
-      platform shell added later.
+- [x] Select images and save a PDF; pages follow list order and the file opens
+      in Preview (verified by rendering a generated file with PDFKit).
+- [x] Images are embedded from the original blobs, not the 128 px thumbnails.
+- [x] Cancelling the save dialog leaves no file.
+- [x] A missing or unreadable blob aborts with a clear message and no file.
+- [x] PDF generation works without the app UI (library test).
+- [ ] Large selections show progress and do not freeze the popup.
 
 ### Open questions
 
-- One image per page vs. a configurable grid (start with one per page).
-- Page size/quality defaults and whether to downsample very large images.
-- Include source/app/date captions, or only images?
-- Should the selection include only the Images section or also image file URLs?
-- Should pinned images be selectable and marked in the grid? (Yes, but pinning
-  does not change PDF order unless the operator reorders.)
+- One image per page vs. a configurable grid (one per page for now).
+- Default page size and whether to downsample very large images.
+- Captions only, or images plus a title page?
+- Should pinned images sort first in the PDF, or always follow history order?
 
 ## Cross-platform notes
 
@@ -141,7 +125,7 @@ write a PDF to a location they choose.
 - PDF generation belongs in a portable crate; the selection window and save
   dialog belong to each platform shell.
 - Do not implement these only in the macOS shell if the core can own the rules.
-  Add tests to `rustclip-core` and, once created, `rustclip-pdf`.
+  Add tests to `rustclip-core` and `rustclip-pdf`.
 
 ## Non-goals for this roadmap
 

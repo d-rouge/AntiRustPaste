@@ -16,7 +16,7 @@ Runs:
 
 1. `cargo fmt --all -- --check`
 2. `cargo clippy --workspace --all-targets -- -D warnings`
-3. `cargo test --workspace` (macOS shell + core + imaging)
+3. `cargo test --workspace` (macOS shell + core + imaging + PDF)
 
 Current unit tests cover:
 
@@ -26,13 +26,18 @@ Current unit tests cover:
 | `rustclip-core` | `settings` | Ignored-app dedup/sort, platform-neutral modifier bits |
 | `rustclip-core` | `filter` | Text/Images sections, query across preview/text/source |
 | `rustclip-core` | `thumbnails` | Cache naming, prune, blob→thumbnail generation, background worker result, clear |
-| `rustclip-imaging` | codec | PNG/TIFF/JPEG metadata, aspect-preserving thumbnails, no upscaling, hostile inputs, dimension caps |
+| `rustclip-imaging` | codec | PNG/TIFF/JPEG metadata, aspect-preserving thumbnails, no upscaling, hostile inputs, dimension caps, RGB decode with alpha composited onto white |
+| `rustclip-pdf` | export | Empty selection, invalid image, one page per image, upright image transform, cross-reference offsets point at every object |
 | `rustclip` (macOS) | `settings` | Legacy NSEvent modifier migration |
 | `rustclip` (macOS) | `hotkey` | Shortcut formatting, Carbon modifier mapping |
 | `rustclip` (macOS) | `thumbnails` | Unsafe cache roots, filesystem-safe user key |
+| `rustclip` (macOS) | `app` | PDF destination is replaced atomically; a missing directory is reported without leaving a file |
 
 Tests that touch the filesystem use `std::env::temp_dir()` plus a UUID and remove
-their directory. They never call AppKit or touch the pasteboard.
+their directory. They never call AppKit or touch the pasteboard. The PDF tests
+check the container bytes, object offsets and page transforms without an
+external renderer; during development the output was also rendered with PDFKit
+to confirm page size, margins, colour and upright orientation.
 
 ## Isolated launch smoke test
 
@@ -67,7 +72,7 @@ RUSTCLIP_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
 | --- | --- | --- |
 | 1 | Left-click the menu-bar icon | Popup opens under the icon, search focused |
 | 2 | Press Escape | Popup closes |
-| 3 | Right-click the icon | Status menu with Preferences/Clear All Clippings/About/Quit |
+| 3 | Right-click the icon | Status menu with Preferences/Export Images to PDF…/Clear All Clippings/About/Quit |
 | 4 | Copy a synthetic text marker | A new row appears within ~1 s, with source app and "just now" |
 | 5 | Copy the same marker again | Row count unchanged, marker moves to the top |
 | 6 | Type part of the marker | List filters live; footer count updates |
@@ -94,6 +99,11 @@ RUSTCLIP_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
 | 22e | Unpin a row | Row leaves the pinned group; explicit delete still removes it |
 | 23 | Multi-monitor / full-screen app | Popup appears on the status item's screen and above full-screen spaces |
 | 24 | Quit and relaunch | History and preferences persist; thumbnails regenerate if the temp cache was purged |
+| 25 | Images tab, one or more images, click **PDF…** | Export window lists every image selected; status reads `N of N images selected` |
+| 26 | Click a row, then Select All/Select None | Selection and status follow; **Save PDF…** is disabled with nothing selected |
+| 27 | Save PDF… into a scratch folder and open the file in Preview | One A4 page per image in list order, centred with white margins, original resolution, right way up |
+| 28 | Cancel the save dialog, then close the export window | No file is written and the window closes; the app stays usable |
+| 29 | Remove a selected blob behind the app, then save | Alert reports the problem, no partial PDF, export window stays open |
 
 After a manual run: quit the app, remove the scratch directory, and confirm no
 `rustclip` process remains. Do not run `pkill -f rustclip`; stop the PID you
@@ -116,6 +126,8 @@ crash fix.
 | Cache contains a path-like or non-hash filename | Ignored by pruning; never executed or opened |
 | `blob` is `../secret`, an absolute path or lacks `.bin` | Record dropped; `read_blob`/`delete_blob` refuse it |
 | Blob file missing | Record dropped on load |
+| Export selected image whose blob vanished | Export aborts with an alert and writes no file |
+| Export destination is not writable | Temporary write fails, no partial file, alert |
 | Preview field is extremely long | Truncated to 200 characters on load; drawing stays bounded |
 | Text clip larger than 50 MiB | Skipped |
 | Image/data blob larger than 50 MiB or empty | Skipped |

@@ -14,7 +14,9 @@ The repository is a Cargo workspace:
 - `crates/rustclip-core` — platform-neutral model, storage, settings, filtering
   and thumbnail worker;
 - `crates/rustclip-imaging` — a pure-Rust, `#![forbid(unsafe_code)]` codec with
-  no AppKit, filesystem or environment access.
+  no AppKit, filesystem or environment access;
+- `crates/rustclip-pdf` — a pure-Rust, `#![forbid(unsafe_code)]` PDF writer for
+  the image export, with no AppKit, filesystem or environment access.
 
 Future Windows/Linux shells are `apps/rustclip-<os>`. They depend on core; core
 never depends on a shell. See [platforms.md](platforms.md).
@@ -35,12 +37,14 @@ never depends on a shell. See [platforms.md](platforms.md).
 | `crates/rustclip-core/src/settings.rs` | Platform-neutral `Settings`, `IgnoredApp`, `Modifiers` bits |
 | `crates/rustclip-core/src/filter.rs` | `Section` (Text/Images) and search filtering |
 | `crates/rustclip-core/src/thumbnails.rs` | Thumbnail worker, file cache, prune/clear, generation epochs |
-| `crates/rustclip-imaging` | Pure-Rust image metadata and thumbnail generation (`image` crate) |
+| `crates/rustclip-imaging` | Pure-Rust image metadata, thumbnails and RGB decoding (`image` crate) |
+| `crates/rustclip-pdf` | PDF container, A4 page layout and Flate-compressed image embedding |
 
 `app.rs` is the macOS hub. Nothing else calls AppKit directly except `views.rs`
 (views), `thumbnails.rs` (loading a finished PNG into `NSImage` on the main
 thread) and `pasteboard.rs` (the pasteboard). `rustclip-core`,
-`rustclip-imaging` and the pure parts of `hotkey.rs` have no AppKit dependency.
+`rustclip-imaging`, `rustclip-pdf` and the pure parts of `hotkey.rs` have no
+AppKit dependency.
 `docs/platforms.md` lists what every future shell must implement.
 
 ## Startup
@@ -69,7 +73,8 @@ main
 Autorelease pools and AppKit objects are created on the main thread. The only
 extra thread is the named `rustclip-thumbnails` worker started by
 `ThumbnailService::new`; every AppKit callback into Rust is still on the main
-thread.
+thread. PDF export does not add a worker: it encodes on the main thread after
+the save dialog closes.
 
 ## State and threading
 
@@ -171,10 +176,12 @@ and full-screen-auxiliary behaviour. Its content is an `NSVisualEffectView`
 `RCClipListView::drawRect:`; only the visible range is painted. A segmented
 control switches between **Text** and **Images**; ⌘1/⌘2 do the same. The search
 field is the first responder, and a local key monitor handles arrows, Enter,
-Escape, Delete, ⌘1/⌘2 and ⌘C before AppKit's responder chain. The footer holds
-**Clear Text** and **Clear Images** buttons; each calls
-`Store::remove_where` for its section and then prunes thumbnails. `⌘P` toggles
-the pin of the selected row; pinned rows draw a pin glyph. Presentation is
+Escape, Delete, ⌘1/⌘2, ⌘C, ⌘P and ⌘E before AppKit's responder chain. The
+footer holds **Clear Text** and **Clear Images** buttons; each calls
+`Store::remove_where` for its section and then prunes thumbnails. On the Images
+tab it also holds **PDF…**, which opens the export window, and the footer hint
+switches to `⌘E PDF`. `⌘P` toggles the pin of the selected row; pinned rows draw
+a tilting SF Symbol pin. Presentation is
 deferred by one 50 ms timer after a status-item click: making the panel key
 inside the mouse event lets the status bar take key back and immediately fires
 `windowDidResignKey`.
@@ -229,6 +236,39 @@ pasteboard PNG/TIFF/JPEG
   `IMG` placeholder; the 0.1 s drain timer installs the image and redraws. The
   in-memory cache is capped at 256 entries (it clears when full). AppKit image
   creation stays on the main thread.
+
+## Image export to PDF
+
+```
+PDF… / status menu / ⌘E
+  └── app::open_pdf_export
+       ├── refuse with an alert when the history has no images
+       ├── views::build_pdf_export  (560 pt window, selectable list, Save)
+       └── makeKeyAndOrderFront
+PDF window
+  ├── row click            -> toggle id in PdfExportState.selected
+  ├── Select All/None      -> replace the set
+  ├── Save PDF… (⌘S)       -> NSSavePanel::runModal
+  │     └── app::save_pdf
+  │          ├── read original blobs inside one with_state borrow
+  │          ├── rustclip_pdf::write_pdf (decode, lay out, deflate)
+  │          └── write to `<name>.pdf.tmp`, then rename over the destination
+  └── Cancel / esc / close -> close_pdf_export (orders the window out)
+```
+
+- Selection is stored by clip id, so new captures cannot change what is
+  selected; ids that disappear are ignored.
+- `PdfExportParts` retains the window and its controls. The window has no
+  delegate: closing it only orders it out, and the next export replaces the
+  stored parts. Dropping the window from inside its own close callback would be
+  unsafe, so the state is not torn down there.
+- The writer emits the catalogue, page tree, one page and content stream per
+  image and one `/DeviceRGB` image XObject compressed with Flate. Rows are
+  negated in height because image samples start at the top while PDF user space
+  grows upwards.
+- Encoding runs on the main thread: the input is bounded by the history limit,
+  the 50 MiB blob cap and the 32 MP imaging cap, and no second worker is allowed
+  without the operator's approval.
 
 ## Storage
 

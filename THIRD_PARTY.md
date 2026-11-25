@@ -15,6 +15,7 @@ dependencies that are not part of the Rust standard library.
 | `uuid` | 1.x | Apache-2.0 OR MIT | Clip ids and blob names |
 | `dirs` | 7.x | MIT OR Apache-2.0 | Platform data/home directories |
 | `image` | 0.25.10 | MIT OR Apache-2.0 | PNG/TIFF/JPEG decode and thumbnail encoding |
+| `flate2` | 1.1.x | MIT OR Apache-2.0 | Flate compression of PDF image streams (default pure-Rust `miniz_oxide` backend) |
 
 `image` is enabled with `default-features = false` and only the `png`, `tiff`
 and `jpeg` features. No dependency has a C build step or network access at

@@ -10,7 +10,7 @@ RustClip's docs are split by audience. Read the first two before changing code.
 | [Testing](testing.md) | contributors, agents | Unit tests, GUI checks, hostile inputs, isolation and safety rules |
 | [Decisions](decisions.md) | contributors | Why the app uses AppKit/objc2, JSON blobs, Carbon, CGEvent and LaunchAgent |
 | [Platforms](platforms.md) | contributors, agents | What exists per OS, boundaries and work for new shells |
-| [Roadmap](../ROADMAP.md) | contributors, agents | Pinned entries, image→PDF export and open questions |
+| [Roadmap](../ROADMAP.md) | contributors, agents | Pinned entries, image export and open questions |
 | [Agent playbook](agent-playbook.md) | agents | Safe recipes, crash patterns, handoff checklist |
 | [rustclip-imaging](../crates/rustclip-imaging/README.md) | contributors | Pure-Rust image metadata and thumbnail API |
 

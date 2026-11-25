@@ -64,9 +64,11 @@ Both tabs are newest first, except pinned clips: they form a group at the top
 `Your clippings will appear here…` or `Your images will appear here…`. No search
 result: `No clippings found` or `No images found`. File URLs stay in Text even
 when they point at an image.
-- The footer shows `N clipping(s)` / `N image(s)`, the paste/delete hints and
-  two buttons: **Clear Text** and **Clear Images**. Each button clears the whole
-  section, not just search results; it is disabled when that section is empty.
+- The footer shows `N clipping(s)` / `N image(s)` and two buttons: **Clear
+  Text** and **Clear Images**. Each button clears the whole section, not just
+  search results; it is disabled when that section is empty. On the Images tab
+  a **PDF…** button appears between the count and **Clear Text**; the footer
+  hint reads `⌘E PDF` there instead of `⌘P pin`.
 - The list scrolls with the wheel/trackpad and clamps to its content.
 - Relative time: `just now`, `Nm ago`, `Nh ago`, `Nd ago`, then `Mon D`.
 - Preview normalisation: runs of whitespace collapse to one space, leading and
@@ -92,6 +94,7 @@ when they point at an image.
 | Escape | Close the popup |
 | ⌘1 / ⌘2 | Switch to the Text / Images tab |
 | ⌘P | Pin or unpin the selected clipping (the row pin icon does the same) |
+| ⌘E | Open the image export window when the history contains images |
 | Tab / typing | Goes to the search field; the list does not steal text input |
 
 The key monitor runs before the responder chain and only acts while the popup is
@@ -114,12 +117,52 @@ key.
 ## 7. Status menu
 
 - **Preferences…** opens the preferences window.
+- **Export Images to PDF…** opens the image selection window; with no images it
+  beeps and explains that at least one image is needed.
 - **Clear All Clippings** asks for confirmation when enabled, then clears the
   index, every text/image blob and the thumbnail cache (including pending jobs).
 - **About RustClip** shows version, shortcut and history path.
 - **Quit RustClip** terminates the app.
 
-## 8. Preferences
+## 8. Export images to PDF
+
+Entry points: the **PDF…** footer button on the Images tab, **Export Images to
+PDF…** in the status menu, or `⌘E` while the popup is open. With no images the
+app beeps and shows an explanation instead of opening a window.
+
+The export window lists every image clip in history order (pinned first, newest
+first). Every image starts selected.
+
+- Clicking a row or its checkbox includes or excludes that image.
+- **Select All** (⌘A) and **Select None** (⌘D) change the whole selection.
+- The status line reads `N of M images selected`; **Save PDF…** (⌘S) is disabled
+  when nothing is selected.
+- **Cancel**, esc or the title-bar close button close the window without saving.
+- Images captured while the window is open appear at their history position and
+  start unselected.
+
+**Save PDF…** opens the system save dialog with the default name
+`Clipboard Images.pdf`; a missing `.pdf` extension is added. After a destination
+is chosen the app:
+
+1. reads the original blobs (not thumbnails) for the selected images;
+2. builds one A4 page per image in list order, centring each image with a 12 mm
+   margin and preserving its aspect ratio;
+3. decodes each image to 8-bit RGB, compositing transparency onto white, and
+   compresses the samples with Flate;
+4. writes the complete PDF to a temporary file next to the destination and
+   renames it into place.
+
+Cancelling the save dialog writes nothing. A missing or unreadable blob aborts
+the export with an alert and no file; a write or rename failure is reported the
+same way. The export never changes history, pins, settings or thumbnails.
+
+Limitations in this version: no reordering, no page-size/orientation options, no
+progress indicator (encoding runs on the main thread after the dialog closes),
+and EXIF orientation is not applied. Large selections pause the popup until the
+file is written.
+
+## 9. Preferences
 
 ### General
 
@@ -155,7 +198,7 @@ be undone. The status menu's
 - Duplicate bundle ids are not added twice; entries sort by lowercased name.
 - Ignoring affects new captures only; existing history is not purged.
 
-## 9. Storage behaviour
+## 10. Storage behaviour
 
 - History: JSON index + blob files, atomic index replacement.
 - A corrupt index becomes `history.json.bak`; the app starts empty and logs.
@@ -173,7 +216,7 @@ be undone. The status menu's
 - Preferences use `NSUserDefaults`.
 - Login item: `~/Library/LaunchAgents/com.rustclip.app.plist`.
 
-## 10. Edge cases
+## 11. Edge cases
 
 - Empty pasteboard or an unsupported-only item: no history change.
 - Several pasteboard items: each supported item is captured in order, up to 25.
@@ -195,7 +238,7 @@ be undone. The status menu's
   is restored.
 - Accessibility denied: manual paste still works.
 
-## 11. Non-goals
+## 12. Non-goals
 
 Cloud sync, named clipboards, encryption at rest, an image grid, EXIF
 orientation correction, per-row accessibility elements (currently absent),

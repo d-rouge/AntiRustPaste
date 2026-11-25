@@ -1,0 +1,12 @@
+[package]
+name = "rustclip-pdf"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Pure-Rust image-to-PDF export for RustClip"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+flate2 = "1.1"
+rustclip-imaging = { path = "../rustclip-imaging" }

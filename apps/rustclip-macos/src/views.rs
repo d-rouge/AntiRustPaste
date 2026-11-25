@@ -473,6 +473,357 @@ fn draw_image_fit(rect: NSRect, image: &NSImage) {
 }
 
 // ---------------------------------------------------------------------------
+// PDF image selection
+// ---------------------------------------------------------------------------
+
+pub(crate) const PDF_ROW_H: f64 = 64.0;
+
+define_class!(
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "RCPdfSelectionView"]
+    #[ivars = ()]
+    pub(crate) struct PdfSelectionView;
+
+    unsafe impl NSObjectProtocol for PdfSelectionView {}
+
+    impl PdfSelectionView {
+        #[unsafe(method(isFlipped))]
+        fn is_flipped(&self) -> bool {
+            true
+        }
+
+        #[unsafe(method(acceptsFirstResponder))]
+        fn accepts_first_responder(&self) -> bool {
+            true
+        }
+
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty: NSRect) {
+            guard("pdf_selection_draw", || draw_pdf_selection(self));
+        }
+
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &NSEvent) {
+            guard("pdf_selection_click", || {
+                app::pdf_toggle_from_click(self, event);
+            });
+        }
+    }
+);
+
+impl PdfSelectionView {
+    pub(crate) fn create(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(500.0, 1.0));
+        unsafe { msg_send![super(this), initWithFrame: frame] }
+    }
+}
+
+fn draw_pdf_selection(view: &PdfSelectionView) {
+    let bounds = view.bounds();
+    let width = bounds.size.width;
+    let height = bounds.size.height;
+    let rows = with_state(|s: &mut AppState| {
+        let selected = s
+            .pdf_export
+            .as_ref()
+            .map(|pdf| pdf.selected.clone())
+            .unwrap_or_default();
+        s.store
+            .clips
+            .iter()
+            .filter(|clip| clip.kind == ClipKind::Image)
+            .map(|clip| {
+                (
+                    clip.id.clone(),
+                    clip.hash,
+                    clip.blob.clone(),
+                    image_title(clip),
+                    clip.subtitle(),
+                    selected.contains(&clip.id),
+                )
+            })
+            .collect::<Vec<_>>()
+    });
+
+    if rows.is_empty() {
+        draw_text(
+            "No images to export",
+            NSRect::new(
+                NSPoint::new(0.0, height / 2.0 - 10.0),
+                NSSize::new(width, 20.0),
+            ),
+            &NSFont::systemFontOfSize(13.0),
+            &NSColor::secondaryLabelColor(),
+            NSTextAlignment::Center,
+        );
+        return;
+    }
+
+    let title_font = NSFont::systemFontOfSize(13.0);
+    let subtitle_font = NSFont::systemFontOfSize(11.0);
+    let label = NSColor::labelColor();
+    let secondary = NSColor::secondaryLabelColor();
+    let accent = NSColor::selectedContentBackgroundColor();
+    let border = NSColor::separatorColor();
+    let white = NSColor::whiteColor();
+
+    with_state(|s: &mut AppState| {
+        for (index, (id, hash, blob, title, subtitle, selected)) in rows.iter().enumerate() {
+            let _ = id;
+            let y = index as f64 * PDF_ROW_H;
+            let row_rect = NSRect::new(NSPoint::new(0.0, y), NSSize::new(width, PDF_ROW_H));
+            if *selected {
+                fill_rounded(row_rect, 0.0, &accent.colorWithAlphaComponent(0.08));
+            }
+
+            let checkbox = NSRect::new(NSPoint::new(14.0, y + 24.0), NSSize::new(16.0, 16.0));
+            let box_path =
+                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(checkbox, 4.0, 4.0);
+            if *selected {
+                accent.setFill();
+                box_path.fill();
+                let check = NSBezierPath::new();
+                check.moveToPoint(NSPoint::new(
+                    checkbox.origin.x + 4.0,
+                    checkbox.origin.y + 8.0,
+                ));
+                check.lineToPoint(NSPoint::new(
+                    checkbox.origin.x + 7.0,
+                    checkbox.origin.y + 4.5,
+                ));
+                check.lineToPoint(NSPoint::new(
+                    checkbox.origin.x + 12.0,
+                    checkbox.origin.y + 11.0,
+                ));
+                white.setStroke();
+                check.setLineWidth(1.6);
+                check.stroke();
+            } else {
+                NSColor::controlBackgroundColor().setFill();
+                box_path.fill();
+                border.setStroke();
+                box_path.setLineWidth(1.0);
+                box_path.stroke();
+            }
+
+            let thumb_rect = NSRect::new(NSPoint::new(42.0, y + 10.0), NSSize::new(44.0, 44.0));
+            match app::thumbnail_for(s, *hash, blob.as_deref()) {
+                Some(image) => draw_image_fit(thumb_rect, &image),
+                None => {
+                    fill_rounded(thumb_rect, 4.0, &border.colorWithAlphaComponent(0.35));
+                    draw_text(
+                        "IMG",
+                        NSRect::new(
+                            NSPoint::new(thumb_rect.origin.x, thumb_rect.origin.y + 15.0),
+                            NSSize::new(thumb_rect.size.width, 12.0),
+                        ),
+                        &NSFont::systemFontOfSize(9.0),
+                        &secondary,
+                        NSTextAlignment::Center,
+                    );
+                }
+            }
+
+            draw_text(
+                title,
+                NSRect::new(
+                    NSPoint::new(96.0, y + 13.0),
+                    NSSize::new(width - 112.0, 18.0),
+                ),
+                &title_font,
+                &label,
+                NSTextAlignment::Left,
+            );
+            draw_text(
+                subtitle,
+                NSRect::new(
+                    NSPoint::new(96.0, y + 34.0),
+                    NSSize::new(width - 112.0, 15.0),
+                ),
+                &subtitle_font,
+                &secondary,
+                NSTextAlignment::Left,
+            );
+
+            if index + 1 != rows.len() {
+                fill_rect(
+                    NSRect::new(
+                        NSPoint::new(96.0, y + PDF_ROW_H - 0.5),
+                        NSSize::new(width - 112.0, 0.5),
+                    ),
+                    &border.colorWithAlphaComponent(0.5),
+                );
+            }
+        }
+    });
+}
+
+pub(crate) struct PdfExportParts {
+    pub window: Retained<NSWindow>,
+    pub view: Retained<PdfSelectionView>,
+    pub status: Retained<NSTextField>,
+    pub select_all: Retained<NSButton>,
+    pub select_none: Retained<NSButton>,
+    pub save: Retained<NSButton>,
+}
+
+impl PdfExportParts {
+    /// Hide the export window. The parts keep the window alive; a later export
+    /// replaces them.
+    pub(crate) fn close(&self) {
+        self.window.orderOut(None);
+    }
+}
+
+pub(crate) fn build_pdf_export(
+    mtm: MainThreadMarker,
+    delegate: &app::AppDelegate,
+    image_count: usize,
+) -> Option<PdfExportParts> {
+    let target = as_any(delegate);
+    let window = unsafe {
+        NSWindow::initWithContentRect_styleMask_backing_defer(
+            NSWindow::alloc(mtm),
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(560.0, 560.0)),
+            NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
+            NSBackingStoreType::Buffered,
+            false,
+        )
+    };
+    window.setTitle(&NSString::from_str("Export Images to PDF"));
+    unsafe { window.setReleasedWhenClosed(false) };
+    window.center();
+    window.setBackgroundColor(Some(&NSColor::windowBackgroundColor()));
+
+    let content = window.contentView()?;
+    let header = NSTextField::labelWithString(
+        &NSString::from_str("Select images. Each selected image is one A4 page."),
+        mtm,
+    );
+    header.setFrame(NSRect::new(
+        NSPoint::new(16.0, 524.0),
+        NSSize::new(528.0, 18.0),
+    ));
+    header.setFont(Some(&NSFont::systemFontOfSize(12.0)));
+    header.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    content.addSubview(&header);
+
+    let view = PdfSelectionView::create(mtm);
+    let document_height = (image_count as f64 * PDF_ROW_H + 16.0).max(448.0);
+    view.setFrame(NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(528.0, document_height),
+    ));
+
+    let scroll = NSScrollView::new(mtm);
+    scroll.setFrame(NSRect::new(
+        NSPoint::new(16.0, 64.0),
+        NSSize::new(528.0, 448.0),
+    ));
+    scroll.setBorderType(NSBorderType::BezelBorder);
+    scroll.setDrawsBackground(true);
+    scroll.setHasVerticalScroller(true);
+    scroll.setAutohidesScrollers(true);
+    scroll.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
+    scroll.setDocumentView(Some(&view));
+    content.addSubview(&scroll);
+
+    let status = NSTextField::labelWithString(&NSString::from_str(""), mtm);
+    status.setFrame(NSRect::new(
+        NSPoint::new(16.0, 24.0),
+        NSSize::new(160.0, 18.0),
+    ));
+    status.setFont(Some(&NSFont::systemFontOfSize(11.0)));
+    status.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    content.addSubview(&status);
+
+    let select_all = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str("Select All"),
+            Some(target),
+            Some(sel!(pdfSelectAll:)),
+            mtm,
+        )
+    };
+    select_all.setFrame(NSRect::new(
+        NSPoint::new(184.0, 16.0),
+        NSSize::new(84.0, 26.0),
+    ));
+    style_pdf_button(&select_all);
+    select_all.setToolTip(Some(&NSString::from_str("Select every image")));
+    content.addSubview(&select_all);
+
+    let select_none = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str("Select None"),
+            Some(target),
+            Some(sel!(pdfSelectNone:)),
+            mtm,
+        )
+    };
+    select_none.setFrame(NSRect::new(
+        NSPoint::new(272.0, 16.0),
+        NSSize::new(92.0, 26.0),
+    ));
+    style_pdf_button(&select_none);
+    select_none.setToolTip(Some(&NSString::from_str("Deselect every image")));
+    content.addSubview(&select_none);
+
+    let save = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str("Save PDF…"),
+            Some(target),
+            Some(sel!(pdfSave:)),
+            mtm,
+        )
+    };
+    save.setFrame(NSRect::new(
+        NSPoint::new(368.0, 16.0),
+        NSSize::new(100.0, 26.0),
+    ));
+    style_pdf_button(&save);
+    save.setKeyEquivalent(&NSString::from_str("s"));
+    save.setToolTip(Some(&NSString::from_str(
+        "Choose where to save the PDF (⌘S)",
+    )));
+    content.addSubview(&save);
+
+    let cancel = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str("Cancel"),
+            Some(target),
+            Some(sel!(pdfCancel:)),
+            mtm,
+        )
+    };
+    cancel.setFrame(NSRect::new(
+        NSPoint::new(472.0, 16.0),
+        NSSize::new(72.0, 26.0),
+    ));
+    style_pdf_button(&cancel);
+    cancel.setKeyEquivalent(&NSString::from_str("\u{1b}"));
+    cancel.setToolTip(Some(&NSString::from_str("Close this window (esc)")));
+    content.addSubview(&cancel);
+
+    Some(PdfExportParts {
+        window,
+        view,
+        status,
+        select_all,
+        select_none,
+        save,
+    })
+}
+
+fn style_pdf_button(button: &NSButton) {
+    button.setBezelStyle(NSBezelStyle::Automatic);
+    button.setControlSize(NSControlSize::Small);
+    button.setFont(Some(&NSFont::systemFontOfSize(11.0)));
+}
+
+// ---------------------------------------------------------------------------
 // Ignored apps list
 // ---------------------------------------------------------------------------
 
@@ -622,6 +973,7 @@ pub(crate) struct PanelParts {
     pub section_control: Retained<NSSegmentedControl>,
     pub clear_text_button: Retained<NSButton>,
     pub clear_images_button: Retained<NSButton>,
+    pub export_pdf_button: Retained<NSButton>,
     pub pin_outline: Option<Retained<NSImage>>,
     pub pin_filled: Option<Retained<NSImage>>,
     pub pin_outline_selected: Option<Retained<NSImage>>,
@@ -701,7 +1053,7 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
     let footer = NSTextField::labelWithString(&NSString::from_str("0 clippings"), mtm);
     footer.setFrame(NSRect::new(
         NSPoint::new(14.0, 9.0),
-        NSSize::new(210.0, 16.0),
+        NSSize::new(148.0, 16.0),
     ));
     footer.setFont(Some(&NSFont::systemFontOfSize(10.0)));
     footer.setTextColor(Some(&NSColor::secondaryLabelColor()));
@@ -717,7 +1069,7 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
     };
     clear_text_button.setFrame(NSRect::new(
         NSPoint::new(232.0, 6.0),
-        NSSize::new(96.0, 22.0),
+        NSSize::new(94.0, 22.0),
     ));
     clear_text_button.setBezelStyle(NSBezelStyle::Automatic);
     clear_text_button.setControlSize(NSControlSize::Small);
@@ -736,8 +1088,8 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
         )
     };
     clear_images_button.setFrame(NSRect::new(
-        NSPoint::new(334.0, 6.0),
-        NSSize::new(112.0, 22.0),
+        NSPoint::new(330.0, 6.0),
+        NSSize::new(116.0, 22.0),
     ));
     clear_images_button.setBezelStyle(NSBezelStyle::Automatic);
     clear_images_button.setControlSize(NSControlSize::Small);
@@ -746,6 +1098,28 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
         "Delete all copied images and their thumbnails",
     )));
     bg.addSubview(&clear_images_button);
+
+    let export_pdf_button = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str("PDF…"),
+            Some(as_any(delegate)),
+            Some(sel!(exportImagesPdf:)),
+            mtm,
+        )
+    };
+    export_pdf_button.setFrame(NSRect::new(
+        NSPoint::new(166.0, 6.0),
+        NSSize::new(62.0, 22.0),
+    ));
+    export_pdf_button.setBezelStyle(NSBezelStyle::Automatic);
+    export_pdf_button.setControlSize(NSControlSize::Small);
+    export_pdf_button.setFont(Some(&NSFont::systemFontOfSize(10.0)));
+    export_pdf_button.setToolTip(Some(&NSString::from_str(
+        "Choose images and export them to a PDF (⌘E)",
+    )));
+    export_pdf_button.setHidden(true);
+    bg.addSubview(&export_pdf_button);
+
     let pin_outline = pin_symbol(
         "pin",
         &NSColor::secondaryLabelColor().colorWithAlphaComponent(0.8),
@@ -763,6 +1137,7 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
         section_control,
         clear_text_button,
         clear_images_button,
+        export_pdf_button,
         pin_outline,
         pin_filled,
         pin_outline_selected,

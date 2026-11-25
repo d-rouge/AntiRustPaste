@@ -2,6 +2,8 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::ptr::{NonNull, null_mut};
 use std::time::{Duration, Instant};
 
@@ -20,10 +22,11 @@ use rustclip_core::{
     ClipKind, IgnoredApp, MAX_LIMIT, Section, Settings, Store, ThumbnailService,
     filter_indices as core_filter_indices,
 };
+use rustclip_pdf::PdfImage;
 
 use crate::settings::{self, apply_start_at_login};
 use crate::thumbnails;
-use crate::views::{self, ClipListView, ClipPanel, PanelDelegate, PrefsParts};
+use crate::views::{self, ClipListView, ClipPanel, PanelDelegate, PdfExportParts, PrefsParts};
 
 pub(crate) const PANEL_W: f64 = 460.0;
 pub(crate) const PANEL_H: f64 = 480.0;
@@ -80,6 +83,11 @@ impl SectionUi for Section {
     }
 }
 
+pub(crate) struct PdfExportState {
+    pub parts: PdfExportParts,
+    pub selected: HashSet<String>,
+}
+
 pub(crate) struct AppState {
     pub store: Store,
     pub settings: Settings,
@@ -92,6 +100,7 @@ pub(crate) struct AppState {
     pub section_control: Retained<NSSegmentedControl>,
     pub clear_text_button: Retained<NSButton>,
     pub clear_images_button: Retained<NSButton>,
+    pub export_pdf_button: Retained<NSButton>,
     pub pin_outline: Option<Retained<NSImage>>,
     pub pin_filled: Option<Retained<NSImage>>,
     pub pin_outline_selected: Option<Retained<NSImage>>,
@@ -104,6 +113,7 @@ pub(crate) struct AppState {
     #[allow(dead_code)]
     pub panel_delegate: Retained<PanelDelegate>,
     pub prefs: Option<PrefsParts>,
+    pub pdf_export: Option<PdfExportState>,
     pub selected: usize,
     pub scroll: f64,
     pub query: String,
@@ -232,8 +242,19 @@ fn set_section(section: ClipboardSection) {
 fn update_footer(s: &AppState) {
     let count = filtered_indices(s).len();
     let label = s.section.footer_label(count);
-    s.footer
-        .setStringValue(&NSString::from_str(&format!("{label} · ⏎ · ⌫ · ⌘P pin")));
+    let hint = match s.section {
+        ClipboardSection::Text => format!("{label} · ⌘P pin"),
+        ClipboardSection::Images => format!("{label} · ⌘E PDF"),
+    };
+    s.footer.setStringValue(&NSString::from_str(&hint));
+    s.export_pdf_button
+        .setHidden(s.section != ClipboardSection::Images);
+    s.export_pdf_button.setEnabled(
+        s.store
+            .clips
+            .iter()
+            .any(|clip| clip.kind == ClipKind::Image),
+    );
     s.clear_text_button.setEnabled(
         s.store
             .clips
@@ -402,6 +423,31 @@ define_class!(
             guard("clear_images_section", || {
                 clear_section(ClipboardSection::Images);
             });
+        }
+
+        #[unsafe(method(exportImagesPdf:))]
+        fn export_images_pdf(&self, _sender: &AnyObject) {
+            guard("export_images_pdf", open_pdf_export);
+        }
+
+        #[unsafe(method(pdfSelectAll:))]
+        fn pdf_select_all(&self, _sender: &AnyObject) {
+            guard("pdf_select_all", || pdf_select(true));
+        }
+
+        #[unsafe(method(pdfSelectNone:))]
+        fn pdf_select_none(&self, _sender: &AnyObject) {
+            guard("pdf_select_none", || pdf_select(false));
+        }
+
+        #[unsafe(method(pdfSave:))]
+        fn pdf_save(&self, _sender: &AnyObject) {
+            guard("pdf_save", save_pdf);
+        }
+
+        #[unsafe(method(pdfCancel:))]
+        fn pdf_cancel(&self, _sender: &AnyObject) {
+            guard("pdf_cancel", close_pdf_export);
         }
 
         #[unsafe(method(showPreferences:))]
@@ -587,6 +633,7 @@ fn setup_app() {
         section_control: parts.section_control,
         clear_text_button: parts.clear_text_button,
         clear_images_button: parts.clear_images_button,
+        export_pdf_button: parts.export_pdf_button,
         pin_outline: parts.pin_outline,
         pin_filled: parts.pin_filled,
         pin_outline_selected: parts.pin_outline_selected,
@@ -597,6 +644,7 @@ fn setup_app() {
         thumbnail_service: thumbnails::new_service(),
         panel_delegate,
         prefs: None,
+        pdf_export: None,
         selected: 0,
         scroll: 0.0,
         query: String::new(),
@@ -659,6 +707,12 @@ fn build_status_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
     menu.addItem(&menu_item(
         "Preferences…",
         sel!(showPreferences:),
+        &target,
+        mtm,
+    ));
+    menu.addItem(&menu_item(
+        "Export Images to PDF…",
+        sel!(exportImagesPdf:),
         &target,
         mtm,
     ));
@@ -1113,6 +1167,10 @@ pub(crate) fn handle_key_event(event: &NSEvent) -> bool {
             }
             35 => {
                 toggle_pin_selected();
+                return true;
+            }
+            14 => {
+                open_pdf_export();
                 return true;
             }
             _ => {}
@@ -1671,6 +1729,232 @@ fn activate_app() {
     NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
 }
 
+fn pdf_image_ids(s: &AppState) -> Vec<String> {
+    s.store
+        .clips
+        .iter()
+        .filter(|clip| clip.kind == ClipKind::Image)
+        .map(|clip| clip.id.clone())
+        .collect()
+}
+
+fn pdf_refresh() {
+    with_state(|s| {
+        let Some(pdf) = &s.pdf_export else {
+            return;
+        };
+        let ids = pdf_image_ids(s);
+        let selected = ids.iter().filter(|id| pdf.selected.contains(*id)).count();
+        let total = ids.len();
+        let status = format!("{selected} of {total} images selected");
+        pdf.parts
+            .status
+            .setStringValue(&NSString::from_str(&status));
+        pdf.parts.save.setEnabled(selected > 0);
+        pdf.parts.select_all.setEnabled(selected < total);
+        pdf.parts.select_none.setEnabled(selected > 0);
+        let height = (total as f64 * views::PDF_ROW_H + 16.0).max(448.0);
+        pdf.parts.view.setFrameSize(NSSize::new(528.0, height));
+        pdf.parts.view.setNeedsDisplay(true);
+    });
+}
+
+fn open_pdf_export() {
+    let mtm = main_thread();
+    let count = with_state(|s| {
+        s.store
+            .clips
+            .iter()
+            .filter(|clip| clip.kind == ClipKind::Image)
+            .count()
+    });
+    if count == 0 {
+        NSBeep();
+        show_alert(
+            "No images",
+            "Copy at least one image before exporting a PDF.",
+        );
+        return;
+    }
+
+    if let Some(old) = with_state(|s| s.pdf_export.take()) {
+        old.parts.close();
+    }
+
+    let Some(parts) = views::build_pdf_export(mtm, &delegate_ref(), count) else {
+        NSBeep();
+        show_alert(
+            "Could not open the export window",
+            "The export window could not be created. Nothing was changed.",
+        );
+        return;
+    };
+    let selected = with_state(|s| pdf_image_ids(s).into_iter().collect());
+    with_state(|s| {
+        s.pdf_export = Some(PdfExportState { parts, selected });
+    });
+
+    pdf_refresh();
+    activate_app();
+    let window = with_state(|s| s.pdf_export.as_ref().map(|pdf| pdf.parts.window.clone()));
+    if let Some(window) = window {
+        window.makeKeyAndOrderFront(None);
+    }
+}
+
+pub(crate) fn pdf_toggle_from_click(view: &views::PdfSelectionView, event: &NSEvent) {
+    let point = view.convertPoint_fromView(event.locationInWindow(), None);
+    let row = (point.y / views::PDF_ROW_H).floor();
+    if row < 0.0 {
+        return;
+    }
+    let id = with_state(|s| {
+        s.store
+            .clips
+            .iter()
+            .filter(|clip| clip.kind == ClipKind::Image)
+            .nth(row as usize)
+            .map(|clip| clip.id.clone())
+    });
+    let Some(id) = id else {
+        return;
+    };
+
+    with_state(|s| {
+        let Some(pdf) = &mut s.pdf_export else {
+            return;
+        };
+        if !pdf.selected.remove(&id) {
+            pdf.selected.insert(id);
+        }
+    });
+    pdf_refresh();
+}
+
+fn pdf_select(selected: bool) {
+    with_state(|s| {
+        let ids = pdf_image_ids(s);
+        let Some(pdf) = &mut s.pdf_export else {
+            return;
+        };
+        pdf.selected = if selected {
+            ids.into_iter().collect()
+        } else {
+            HashSet::new()
+        };
+    });
+    pdf_refresh();
+}
+
+fn save_pdf() {
+    let mtm = main_thread();
+    let selected_count = with_state(|s| {
+        let Some(pdf) = &s.pdf_export else {
+            return 0;
+        };
+        s.store
+            .clips
+            .iter()
+            .filter(|clip| clip.kind == ClipKind::Image && pdf.selected.contains(&clip.id))
+            .count()
+    });
+    if selected_count == 0 {
+        NSBeep();
+        return;
+    }
+
+    activate_app();
+    let panel = NSSavePanel::savePanel(mtm);
+    panel.setNameFieldStringValue(&NSString::from_str("Clipboard Images.pdf"));
+    panel.setCanCreateDirectories(true);
+    panel.setExtensionHidden(false);
+    panel.setMessage(Some(&NSString::from_str(
+        "Choose where to save the selected images as a PDF",
+    )));
+    if panel.runModal() != NSModalResponseOK {
+        return;
+    }
+    let Some(url) = panel.URL() else {
+        return;
+    };
+    let Some(path) = url.path().map(|path| PathBuf::from(path.to_string())) else {
+        return;
+    };
+    let path = if path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+    {
+        path
+    } else {
+        path.with_extension("pdf")
+    };
+
+    let (images, missing) = with_state(|s| {
+        let Some(pdf) = &s.pdf_export else {
+            return (Vec::new(), false);
+        };
+        let mut images = Vec::new();
+        let mut missing = false;
+        for clip in s
+            .store
+            .clips
+            .iter()
+            .filter(|clip| clip.kind == ClipKind::Image && pdf.selected.contains(&clip.id))
+        {
+            match clip
+                .blob
+                .as_deref()
+                .and_then(|blob| s.store.read_blob(blob))
+            {
+                Some(bytes) => images.push(PdfImage { bytes }),
+                None => missing = true,
+            }
+        }
+        (images, missing)
+    });
+    if missing || images.len() != selected_count {
+        show_alert(
+            "Some images are missing",
+            "One or more selected images could not be read. Nothing was saved.",
+        );
+        return;
+    }
+
+    // Encoding runs on the main thread so the app keeps its single AppKit
+    // thread; the selection is bounded by the history limit and the save
+    // panel has already closed.
+    let result = rustclip_pdf::write_pdf(&images)
+        .map_err(|error| error.to_string())
+        .and_then(|bytes| write_pdf_file(&path, &bytes));
+    match result {
+        Ok(path) => {
+            close_pdf_export();
+            show_alert("PDF saved", &path.to_string_lossy());
+        }
+        Err(error) => show_alert("Could not export PDF", &error),
+    }
+}
+
+fn write_pdf_file(path: &Path, bytes: &[u8]) -> Result<PathBuf, String> {
+    let temporary = path.with_extension("pdf.tmp");
+    fs::write(&temporary, bytes).map_err(|error| format!("Could not write PDF: {error}"))?;
+    if let Err(error) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("Could not save PDF: {error}"));
+    }
+    Ok(path.to_path_buf())
+}
+
+fn close_pdf_export() {
+    // Clone the handle, drop the state borrow, then call AppKit. The parts stay
+    // stored so the window is not deallocated from inside its own event; the
+    // next export replaces them.
+    let window = with_state(|s| s.pdf_export.as_ref().map(|pdf| pdf.parts.window.clone()));
+    if let Some(window) = window {
+        window.orderOut(None);
+    }
+}
+
 fn show_alert(message: &str, info: &str) {
     let mtm = main_thread();
     activate_app();
@@ -1700,4 +1984,39 @@ fn show_about() {
     )));
     alert.addButtonWithTitle(&NSString::from_str("OK"));
     alert.runModal();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("rustclip-app-test-{}-{name}", std::process::id()))
+    }
+
+    #[test]
+    fn write_pdf_file_replaces_the_destination() {
+        let dir = scratch("pdf-write");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("scratch directory");
+        let target = dir.join("out.pdf");
+        fs::write(&target, b"old").expect("seed destination");
+
+        let written = write_pdf_file(&target, b"%PDF-1.7 test").expect("write pdf");
+        assert_eq!(written, target);
+        assert_eq!(fs::read(&target).expect("read pdf"), b"%PDF-1.7 test");
+        assert!(!dir.join("out.pdf.tmp").exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_pdf_file_reports_a_missing_directory() {
+        let dir = scratch("pdf-missing");
+        let _ = fs::remove_dir_all(&dir);
+        let target = dir.join("nested/out.pdf");
+
+        assert!(write_pdf_file(&target, b"%PDF").is_err());
+        assert!(!target.exists());
+    }
 }

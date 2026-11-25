@@ -23,9 +23,13 @@ are called through small FFI shims.
 - Popup with live search, keyboard navigation, ⏎ to paste, ⌫ to delete, esc to
   close. Choosing a clipping writes it to the pasteboard, reactivates the
   previous app and synthesises ⌘V.
-- Status menu with Preferences, Clear All Clippings (history + thumbnails), About and Quit.
+- Status menu with Preferences, Export Images to PDF…, Clear All Clippings
+  (history + thumbnails), About and Quit.
 - Footer buttons that clear only the **Text** section or only the **Images**
   section, with the same delete confirmation.
+- **Export images to PDF**: pick images in a dedicated window (Images-tab
+  **PDF…** button, status menu or `⌘E`) and save one A4 page per image with the
+  system save dialog. Original blobs are embedded, not thumbnails.
 - Preferences: history limit, record toggle, confirm-before-delete, start at
   login, global shortcut, and an ignored-apps list.
 - History limit from 1 to 9999 clippings (200 by default).
@@ -46,7 +50,7 @@ are called through small FFI shims.
 | [Behaviour](docs/behavior.md) | Exact feature contract and edge cases |
 | [Development](docs/development.md) | Build, run, bundle, debugging, permissions |
 | [Testing](docs/testing.md) | Unit tests, GUI matrix, hostile inputs, isolation |
-| [Roadmap](ROADMAP.md) | Pinned-clipping status and planned image→PDF export |
+| [Roadmap](ROADMAP.md) | Pinned-clipping status and image export work |
 | [Decisions](docs/decisions.md) | Why AppKit/objc2, JSON blobs, Carbon, CGEvent, LaunchAgent |
 | [Platforms](docs/platforms.md) | What exists per OS and what is left to implement |
 | [Agent playbook](docs/agent-playbook.md) | Safe recipes and crash-avoidance patterns |

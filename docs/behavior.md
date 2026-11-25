@@ -1,6 +1,6 @@
 # Behaviour specification
 
-> Last reviewed: 2026-11-25 · Version 0.1.1
+> Last reviewed: 2026-11-25 · Version 0.2.0
 
 This is the contract the app implements and the clean-room specification agents
 may use. Code, labels and assets are AntiRustPaste's own; no CopyClip source or
@@ -220,6 +220,11 @@ be undone. The status menu's
 
 ## 10. Storage behaviour
 
+On the first launch of 0.2.0 the old `Application Support/RustClip` directory is
+renamed to `Application Support/AntiRustPaste` when the new directory does not
+exist yet. If the rename fails, both are left untouched and the app starts with
+an empty new history rather than deleting anything.
+
 - History: JSON index + blob files, atomic index replacement.
 - A corrupt index becomes `history.json.bak`; the app starts empty and logs.
 - Missing blob files drop their records on load.
@@ -229,7 +234,7 @@ be undone. The status menu's
   Pinned clips stay above unpinned clips and are exempt from automatic trimming;
   the configured maximum applies to unpinned clips. Re-copying a pinned clip
   keeps it pinned. Explicit delete/section clear/clear-all removes pinned clips.
-- Thumbnails live outside the history, in `RUSTCLIP_THUMB_CACHE_DIR` or, by
+- Thumbnails live outside the history, in `ANTIRUSTPASTE_THUMB_CACHE_DIR` or, by
   default on macOS, `/tmp/AntiRustPaste-<user>-<hash>/thumbnails`. macOS clears
   `/tmp` at boot; the **Clear Thumbnail Cache** button deletes existing previews
   immediately and queues cleanup for in-flight jobs.

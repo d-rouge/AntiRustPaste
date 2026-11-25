@@ -53,7 +53,7 @@ keystrokes.
 hot-key crate (extra dependency for the same API).
 
 **Trade-off.** Carbon is deprecated for UI but the hot-key API remains
-functional. The wrapper is isolated in `apps/rustclip-macos/src/hotkey.rs` and can be replaced
+functional. The wrapper is isolated in `apps/antirustpaste-macos/src/hotkey.rs` and can be replaced
 without touching app state.
 
 ## ADR-004: Synthetic ⌘V through CoreGraphics
@@ -104,8 +104,8 @@ the global menu bar.
 
 ## ADR-007: Test isolation through environment variables
 
-**Decision.** `RUSTCLIP_DATA_DIR`, `RUSTCLIP_DEFAULTS_SUITE` and
-`RUSTCLIP_LAUNCH_AGENT_DIR` redirect history, preferences and the login item.
+**Decision.** `ANTIRUSTPASTE_DATA_DIR`, `ANTIRUSTPASTE_DEFAULTS_SUITE` and
+`ANTIRUSTPASTE_LAUNCH_AGENT_DIR` redirect history, preferences and the login item.
 
 **Why.** GUI tests otherwise read or destroy the operator's private history and
 change their next login. The overrides are small, explicit and inert when unset;
@@ -148,7 +148,7 @@ This is the first storage task for a 1.0 release.
 ## ADR-010: A separate pure-Rust imaging crate
 
 **Decision.** Move image metadata and thumbnail generation into
-`crates/rustclip-imaging`; keep AppKit loading and cache policy in the app.
+`crates/antirustpaste-imaging`; keep AppKit loading and cache policy in the app.
 
 **Why.** Thumbnail generation must work outside macOS, and the logic is reusable
 without any AntiRustPaste UI. The crate can enforce portability with
@@ -165,12 +165,12 @@ portability), ImageIO/CoreGraphics (macOS-only), hand-written decoders (too much
 risk for hostile input).
 
 **Trade-off.** A workspace and one dependency. If the imaging crate later needs
-to serve only AntiRustPaste again, folding it back into `rustclip-core`/the shell is mechanical because
+to serve only AntiRustPaste again, folding it back into `antirustpaste-core`/the shell is mechanical because
 its API is two functions.
 
 ## ADR-011: A disposable thumbnail cache outside the history
 
-**Decision.** Store encoded thumbnails in `RUSTCLIP_THUMB_CACHE_DIR` or, by
+**Decision.** Store encoded thumbnails in `ANTIRUSTPASTE_THUMB_CACHE_DIR` or, by
 default on macOS, `/tmp/AntiRustPaste-<user>-<hash>/thumbnails`, never in
 `history.json`. Prune by hash; expose **Clear Thumbnail Cache** in Preferences.
 
@@ -187,13 +187,13 @@ migrations), in-memory only (recomputed after every launch).
 
 **Trade-off.** The first draw shows a placeholder while the worker generates the
 file. The in-memory `HashMap` and the file cache prevent repeats. An explicit
-`RUSTCLIP_THUMB_CACHE_DIR` override loses the boot-clearing guarantee; tests are
+`ANTIRUSTPASTE_THUMB_CACHE_DIR` override loses the boot-clearing guarantee; tests are
 responsible for cleaning it.
 
 ## ADR-012: One background worker for thumbnail generation
 
 **Decision.** Keep AppKit, `AppState` and timers on the main thread; move blob
-reads, decode and cache writes to a single named `rustclip-thumbnails` worker.
+reads, decode and cache writes to a single named `antirustpaste-thumbnails` worker.
 A 0.1 s main-thread timer drains completed jobs and creates `NSImage` values.
 
 **Why.** Decoding a large image on the main thread can freeze the popup. The
@@ -211,9 +211,9 @@ placeholder. The worker must never touch AppKit or `AppState`.
 
 ## ADR-013: Workspace with a platform-neutral core and native shells
 
-**Decision.** Keep domain code in `crates/rustclip-core`, the image codec in
-`crates/rustclip-imaging`, and the implemented UI in `apps/rustclip-macos`.
-Future platforms add `apps/rustclip-<os>` beside it.
+**Decision.** Keep domain code in `crates/antirustpaste-core`, the image codec in
+`crates/antirustpaste-imaging`, and the implemented UI in `apps/antirustpaste-macos`.
+Future platforms add `apps/antirustpaste-<os>` beside it.
 
 **Why.** The clipboard model, storage, settings schema, filtering and thumbnail
 worker are identical on every OS and easy to test without a display. Tray icons,
@@ -249,7 +249,7 @@ dependency. Platform shells own permissions and native formats.
 
 ## ADR-015: Pinned clips are core metadata with pinned-first ordering
 
-**Decision.** Add `pinned: bool` to `rustclip_core::Clip`, keep pinned clips at
+**Decision.** Add `pinned: bool` to `antirustpaste_core::Clip`, keep pinned clips at
 the front of the vector, and make `trim` count/remove only unpinned clips. Use
 `⌘P` plus a row glyph in the macOS shell; a row context menu is a follow-up.
 
@@ -266,8 +266,8 @@ pinned. This is intentional and visible in the row count; the alternative
 
 ## ADR-016: Write the PDF container in-house instead of using `printpdf`
 
-**Decision.** `crates/rustclip-pdf` writes the PDF catalogue, page tree, content
-streams and image XObjects itself, using `rustclip-imaging` for decoding and
+**Decision.** `crates/antirustpaste-pdf` writes the PDF catalogue, page tree, content
+streams and image XObjects itself, using `antirustpaste-imaging` for decoding and
 `flate2` for compression.
 
 **Why.** `printpdf` 0.12 pulls in 104 crates for a job that only needs image
@@ -284,6 +284,6 @@ readers accept (no compression of text objects, no linearisation, no metadata
 streams). New page/layout features require changes in our writer rather than a
 library call.
 
-**Validation.** `cargo test -p rustclip-pdf` checks the header, trailer,
+**Validation.** `cargo test -p antirustpaste-pdf` checks the header, trailer,
 `startxref` offsets, one `/Type /Page` per image, `/FlateDecode` streams, and
 that the content matrix negates the height so rows are not upside down.

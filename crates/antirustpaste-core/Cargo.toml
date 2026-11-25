@@ -1,5 +1,5 @@
 [package]
-name = "rustclip-core"
+name = "antirustpaste-core"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
@@ -10,7 +10,7 @@ publish = false
 [dependencies]
 chrono = "0.4.45"
 dirs = "7.0.0"
-rustclip-imaging = { path = "../rustclip-imaging" }
+antirustpaste-imaging = { path = "../antirustpaste-imaging" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 uuid = { version = "1.29.3", features = ["v4"] }

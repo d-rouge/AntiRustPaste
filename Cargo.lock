@@ -18,6 +18,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "antirustpaste"
+version = "0.2.0"
+dependencies = [
+ "antirustpaste-core",
+ "antirustpaste-imaging",
+ "antirustpaste-pdf",
+ "block2",
+ "dirs",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-quartz-core",
+ "objc2-quick-look-ui",
+ "serde_json",
+]
+
+[[package]]
+name = "antirustpaste-core"
+version = "0.1.0"
+dependencies = [
+ "antirustpaste-imaging",
+ "chrono",
+ "dirs",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "antirustpaste-imaging"
+version = "0.1.0"
+dependencies = [
+ "image",
+]
+
+[[package]]
+name = "antirustpaste-pdf"
+version = "0.1.0"
+dependencies = [
+ "antirustpaste-imaging",
+ "flate2",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -587,50 +631,6 @@ checksum = "60dc65c0ff1a7ae1294b0c67b9f14baf70b644404010370171787bfac1038fc0"
 dependencies = [
  "libredox",
  "thiserror",
-]
-
-[[package]]
-name = "rustclip"
-version = "0.1.1"
-dependencies = [
- "block2",
- "dirs",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "objc2-quartz-core",
- "objc2-quick-look-ui",
- "rustclip-core",
- "rustclip-imaging",
- "rustclip-pdf",
- "serde_json",
-]
-
-[[package]]
-name = "rustclip-core"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "dirs",
- "rustclip-imaging",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "rustclip-imaging"
-version = "0.1.0"
-dependencies = [
- "image",
-]
-
-[[package]]
-name = "rustclip-pdf"
-version = "0.1.0"
-dependencies = [
- "flate2",
- "rustclip-imaging",
 ]
 
 [[package]]

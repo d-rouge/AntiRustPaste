@@ -1,5 +1,5 @@
 [package]
-name = "rustclip-pdf"
+name = "antirustpaste-pdf"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
@@ -9,4 +9,4 @@ publish = false
 
 [dependencies]
 flate2 = "1.1"
-rustclip-imaging = { path = "../rustclip-imaging" }
+antirustpaste-imaging = { path = "../antirustpaste-imaging" }

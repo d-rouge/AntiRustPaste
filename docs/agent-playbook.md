@@ -1,6 +1,6 @@
 # Agent playbook
 
-> Last reviewed: 2026-11-25 · Version 0.1.1
+> Last reviewed: 2026-11-25 · Version 0.2.0
 
 Practical recipes for working on AntiRustPaste. Read [`../AGENTS.md`](../AGENTS.md)
 first; this file explains *how*, not what the rules are.
@@ -8,7 +8,7 @@ first; this file explains *how*, not what the rules are.
 ## Before touching anything
 
 ```sh
-pgrep -fl 'AntiRustPaste.app/Contents/MacOS/rustclip|target/.*/rustclip' || true
+pgrep -fl 'AntiRustPaste.app/Contents/MacOS/antirustpaste|target/.*/antirustpaste' || true
 git status --short 2>/dev/null || echo "not a git repository"
 ```
 
@@ -21,25 +21,25 @@ git status --short 2>/dev/null || echo "not a git repository"
 
 ## Safe run and stop
 
-Do not use `cargo run -p rustclip` in an unattended loop: it blocks and owns the menu bar.
+Do not use `cargo run -p antirustpaste` in an unattended loop: it blocks and owns the menu bar.
 Use the smoke script:
 
 ```sh
 ./scripts/smoke.sh
-RUSTCLIP_SMOKE_PREFS=1 ./scripts/smoke.sh
-RUSTCLIP_SMOKE_PANEL=1 ./scripts/smoke.sh
-RUSTCLIP_SMOKE_IMAGES=1 ./scripts/smoke.sh
+ANTIRUSTPASTE_SMOKE_PREFS=1 ./scripts/smoke.sh
+ANTIRUSTPASTE_SMOKE_PANEL=1 ./scripts/smoke.sh
+ANTIRUSTPASTE_SMOKE_IMAGES=1 ./scripts/smoke.sh
 ```
 
 For a longer interactive run, start the process yourself and keep its PID:
 
 ```sh
 SCRATCH="$(mktemp -d)"
-RUSTCLIP_DATA_DIR="$SCRATCH/data" \
-RUSTCLIP_DEFAULTS_SUITE="com.rustclip.agent.$$" \
-RUSTCLIP_LAUNCH_AGENT_DIR="$SCRATCH/LaunchAgents" \
-RUSTCLIP_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
-./target/debug/rustclip &
+ANTIRUSTPASTE_DATA_DIR="$SCRATCH/data" \
+ANTIRUSTPASTE_DEFAULTS_SUITE="com.antirustpaste.agent.$$" \
+ANTIRUSTPASTE_LAUNCH_AGENT_DIR="$SCRATCH/LaunchAgents" \
+ANTIRUSTPASTE_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
+./target/debug/antirustpaste &
 PID=$!
 # ... observe ...
 kill "$PID"
@@ -47,12 +47,12 @@ wait "$PID" 2>/dev/null || true
 rm -rf "$SCRATCH"
 ```
 
-Never run `pkill -f rustclip`, `killall rustclip` or a similar broad match: it
+Never run `pkill -f antirustpaste`, `killall antirustpaste` or a similar broad match: it
 can kill the operator's installed app.
 
 ## Recipe: add a supported pasteboard type
 
-1. Read `apps/rustclip-macos/src/pasteboard.rs` and the precedence list in
+1. Read `apps/antirustpaste-macos/src/pasteboard.rs` and the precedence list in
    `docs/behavior.md`.
 2. Decide where the new type sits in the precedence order. A richer type should
    win over plain text when both are present.
@@ -73,7 +73,7 @@ pasteboard result.
 
 ## Recipe: change history storage
 
-1. Read `crates/rustclip-core/src/store.rs` and ADR-002/ADR-009.
+1. Read `crates/antirustpaste-core/src/store.rs` and ADR-002/ADR-009.
 2. Keep index writes atomic (`tmp` + rename).
 3. Keep blobs out of the index.
 4. Preserve old files:
@@ -88,11 +88,11 @@ pasteboard result.
 
 ## Recipe: change image capture or thumbnails
 
-1. Capture policy lives in `apps/rustclip-macos/src/pasteboard.rs`; cache path
-   and AppKit loading live in `apps/rustclip-macos/src/thumbnails.rs`; the
-   worker/cache is `crates/rustclip-core/src/thumbnails.rs`; decoding lives in
-   `crates/rustclip-imaging`.
-2. Keep `rustclip-imaging` free of AppKit, filesystem and environment access.
+1. Capture policy lives in `apps/antirustpaste-macos/src/pasteboard.rs`; cache path
+   and AppKit loading live in `apps/antirustpaste-macos/src/thumbnails.rs`; the
+   worker/cache is `crates/antirustpaste-core/src/thumbnails.rs`; decoding lives in
+   `crates/antirustpaste-imaging`.
+2. Keep `antirustpaste-imaging` free of AppKit, filesystem and environment access.
    It must keep `#![forbid(unsafe_code)]`.
 3. New formats must be in `image`'s enabled features and in the `Format` match;
    add a fixture test for metadata and a thumbnail test.
@@ -102,13 +102,13 @@ pasteboard result.
    placeholder, never an `unwrap`.
 6. Cache file names must remain `thumb-<16 hex>.png`; pruning must ignore
    anything else. The cache directory is private and disposable.
-7. Keep generation off the main thread. Only the `rustclip-thumbnails` worker
+7. Keep generation off the main thread. Only the `antirustpaste-thumbnails` worker
    may read blobs/decode/write; only the main thread may create `NSImage` or
    touch `AppState`. Send results through the existing channel and drain them in
    `drain_thumbnail_results`.
 8. Add the input to the hostile-input table in `docs/testing.md`.
-9. Run `cargo test -p rustclip-imaging`, `./scripts/check.sh` and
-   `RUSTCLIP_SMOKE_IMAGES=1 ./scripts/smoke.sh`.
+9. Run `cargo test -p antirustpaste-imaging`, `./scripts/check.sh` and
+   `ANTIRUSTPASTE_SMOKE_IMAGES=1 ./scripts/smoke.sh`.
 
 ## Recipe: change the popup or list
 
@@ -134,8 +134,8 @@ pasteboard result.
 
 ## Recipe: add a preference
 
-1. Add a field in `crates/rustclip-core/src/settings.rs` and its persistence
-   mapping in `apps/rustclip-macos/src/settings.rs`.
+1. Add a field in `crates/antirustpaste-core/src/settings.rs` and its persistence
+   mapping in `apps/antirustpaste-macos/src/settings.rs`.
 2. Load with a safe default and clamp numeric values.
 3. Save from the action in `app.rs`; do not write defaults from `drawRect:`.
 4. Reflect the value in `open_preferences` when the window is (re)opened.
@@ -152,16 +152,16 @@ An unknown or malformed stored value must fall back to the default, not panic.
 
    ```sh
    RUST_BACKTRACE=1 \
-   RUSTCLIP_DATA_DIR="$SCRATCH/data" \
-   RUSTCLIP_DEFAULTS_SUITE="com.rustclip.agent.$$" \
-   RUSTCLIP_LAUNCH_AGENT_DIR="$SCRATCH/LaunchAgents" \
-   ./target/debug/rustclip
+   ANTIRUSTPASTE_DATA_DIR="$SCRATCH/data" \
+   ANTIRUSTPASTE_DEFAULTS_SUITE="com.antirustpaste.agent.$$" \
+   ANTIRUSTPASTE_LAUNCH_AGENT_DIR="$SCRATCH/LaunchAgents" \
+   ./target/debug/antirustpaste
    ```
 
-2. Check stderr for `rustclip: recovered from a panic in ...` and
+2. Check stderr for `antirustpaste: recovered from a panic in ...` and
    `RefCell already borrowed`.
 3. If the app exits, open the newest
-   `~/Library/Logs/DiagnosticReports/rustclip*.ips` and map frames to modules.
+   `~/Library/Logs/DiagnosticReports/antirustpaste*.ips` and map frames to modules.
 4. Common causes:
    - AppKit call inside `with_state` → clone handles first;
    - missing `guard` on a new callback;
@@ -173,7 +173,7 @@ An unknown or malformed stored value must fall back to the default, not panic.
 ## Recipe: test the global shortcut without harming the operator
 
 - Set an isolated defaults suite so you do not overwrite their shortcut:
-  `RUSTCLIP_DEFAULTS_SUITE=com.rustclip.agent.$$`.
+  `ANTIRUSTPASTE_DEFAULTS_SUITE=com.antirustpaste.agent.$$`.
 - The shortcut still registers globally for the duration of the test. Do not
   run this while the operator is presenting or sharing their screen without
   asking.
@@ -181,7 +181,7 @@ An unknown or malformed stored value must fall back to the default, not panic.
   `hotkeyModifiers` and `hotkeyDisplay` into the isolated suite before launch,
   or use Preferences while the test app runs.
 - To verify the popup without any global shortcut, use
-  `RUSTCLIP_OPEN_PANEL=1`.
+  `ANTIRUSTPASTE_OPEN_PANEL=1`.
 - Do not script System Settings or Accessibility. If ⌘V does not arrive, check
   `AXIsProcessTrusted` through the app's prompt and ask the operator.
 
@@ -189,11 +189,11 @@ An unknown or malformed stored value must fall back to the default, not panic.
 
 1. Read `docs/platforms.md`; it lists the support matrix and the work each OS
    still needs.
-2. Create `apps/rustclip-<os>` depending on `rustclip-core` and
-   `rustclip-imaging`; add it to workspace members.
+2. Create `apps/antirustpaste-<os>` depending on `antirustpaste-core` and
+   `antirustpaste-imaging`; add it to workspace members.
 3. Map the native clipboard to `Captured`/`Clip` and back; keep the 25-item and
    50 MiB limits.
-4. Map native modifier flags to `rustclip_core::Modifiers`; do not leak native
+4. Map native modifier flags to `antirustpaste_core::Modifiers`; do not leak native
    masks into core.
 5. Reuse `Store`, `Settings`, `filter_indices` and `ThumbnailService`; never
    copy them into the shell.
@@ -208,7 +208,7 @@ An unknown or malformed stored value must fall back to the default, not panic.
 ./scripts/check.sh
 ./make-app.sh
 ./scripts/smoke.sh          # debug binary
-RUSTCLIP_BIN=dist/AntiRustPaste.app/Contents/MacOS/rustclip ./scripts/smoke.sh
+ANTIRUSTPASTE_BIN=dist/AntiRustPaste.app/Contents/MacOS/antirustpaste ./scripts/smoke.sh
 ```
 
 `make-app.sh` ad-hoc signs the bundle. Verify:
@@ -279,7 +279,7 @@ Changed:
 Checks run:
 - ./scripts/check.sh       pass
 - ./scripts/smoke.sh       pass
-- RUSTCLIP_SMOKE_PREFS=1 ./scripts/smoke.sh   pass
+- ANTIRUSTPASTE_SMOKE_PREFS=1 ./scripts/smoke.sh   pass
 - manual: (which rows, with what scratch paths)
 
 Not run:

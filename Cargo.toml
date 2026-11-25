@@ -1,9 +1,9 @@
 [workspace]
 members = [
-    "apps/rustclip-macos",
-    "crates/rustclip-core",
-    "crates/rustclip-pdf",
-    "crates/rustclip-imaging",
+    "apps/antirustpaste-macos",
+    "crates/antirustpaste-core",
+    "crates/antirustpaste-pdf",
+    "crates/antirustpaste-imaging",
 ]
 resolver = "3"
 

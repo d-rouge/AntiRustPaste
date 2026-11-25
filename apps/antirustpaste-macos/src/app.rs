@@ -21,11 +21,11 @@ use objc2_quick_look_ui::{
 use crate::hotkey::{self, Hotkey};
 use crate::paste;
 use crate::pasteboard;
-use rustclip_core::{
+use antirustpaste_core::{
     ClipKind, IgnoredApp, MAX_LIMIT, Section, Settings, Store, ThumbnailService,
     filter_indices as core_filter_indices,
 };
-use rustclip_pdf::PdfImage;
+use antirustpaste_pdf::PdfImage;
 
 use crate::settings::{self, apply_start_at_login};
 use crate::thumbnails;
@@ -178,7 +178,7 @@ const NS_CONTROL: usize = 1 << 18;
 const NS_OPTION: usize = 1 << 19;
 const NS_COMMAND: usize = 1 << 20;
 
-pub(crate) use rustclip_core::Section as ClipboardSection;
+pub(crate) use antirustpaste_core::Section as ClipboardSection;
 
 pub(crate) trait SectionUi {
     fn footer_label(self, count: usize) -> String;
@@ -292,7 +292,7 @@ pub(crate) fn with_state<R>(f: impl FnOnce(&mut AppState) -> R) -> R {
 /// process, so every entry point that the system calls goes through here.
 pub(crate) fn guard(name: &str, f: impl FnOnce()) {
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).is_err() {
-        eprintln!("rustclip: recovered from a panic in {name}");
+        eprintln!("antirustpaste: recovered from a panic in {name}");
     }
 }
 
@@ -302,7 +302,7 @@ pub(crate) fn guard_value<R>(name: &str, f: impl FnOnce() -> R) -> Option<R> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(value) => Some(value),
         Err(_) => {
-            eprintln!("rustclip: recovered from a panic in {name}");
+            eprintln!("antirustpaste: recovered from a panic in {name}");
             None
         }
     }
@@ -778,7 +778,7 @@ impl AppDelegate {
 
 pub fn run() {
     let Some(mtm) = MainThreadMarker::new() else {
-        eprintln!("rustclip: must start on the main thread");
+        eprintln!("antirustpaste: must start on the main thread");
         return;
     };
     let app = NSApplication::sharedApplication(mtm);
@@ -885,14 +885,14 @@ fn setup_app() {
 
     // Automation hooks used by docs/testing.md and scripts/smoke.sh. They are
     // inert unless an agent or test sets them explicitly.
-    if std::env::var_os("RUSTCLIP_OPEN_PREFS").is_some() {
+    if std::env::var_os("ANTIRUSTPASTE_OPEN_PREFS").is_some() {
         open_preferences();
     }
-    let open_images = std::env::var_os("RUSTCLIP_OPEN_IMAGES").is_some();
+    let open_images = std::env::var_os("ANTIRUSTPASTE_OPEN_IMAGES").is_some();
     if open_images {
         set_section(ClipboardSection::Images);
     }
-    if open_images || std::env::var_os("RUSTCLIP_OPEN_PANEL").is_some() {
+    if open_images || std::env::var_os("ANTIRUSTPASTE_OPEN_PANEL").is_some() {
         show_panel();
     }
 }
@@ -2246,7 +2246,7 @@ fn save_pdf() {
     // Encoding runs on the main thread so the app keeps its single AppKit
     // thread; the selection is bounded by the history limit and the save
     // panel has already closed.
-    let result = rustclip_pdf::write_pdf(&images)
+    let result = antirustpaste_pdf::write_pdf(&images)
         .map_err(|error| error.to_string())
         .and_then(|bytes| write_pdf_file(&path, &bytes));
     match result {
@@ -2321,14 +2321,14 @@ fn toggle_image_preview() {
         NSBeep();
         return;
     };
-    let Ok(info) = rustclip_imaging::info(&bytes) else {
+    let Ok(info) = antirustpaste_imaging::info(&bytes) else {
         NSBeep();
         return;
     };
     let extension = match info.format {
-        rustclip_imaging::Format::Png => "png",
-        rustclip_imaging::Format::Tiff => "tiff",
-        rustclip_imaging::Format::Jpeg => "jpg",
+        antirustpaste_imaging::Format::Png => "png",
+        antirustpaste_imaging::Format::Tiff => "tiff",
+        antirustpaste_imaging::Format::Jpeg => "jpg",
     };
     let Some(path) = write_preview_file(hash, &bytes, extension) else {
         NSBeep();
@@ -2461,7 +2461,10 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("rustclip-app-test-{}-{name}", std::process::id()))
+        std::env::temp_dir().join(format!(
+            "antirustpaste-app-test-{}-{name}",
+            std::process::id()
+        ))
     }
 
     #[test]

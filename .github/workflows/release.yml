@@ -48,9 +48,9 @@ jobs:
           esac
 
           version="${tag#v}"
-          cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' apps/rustclip-macos/Cargo.toml | head -n1)"
+          cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' apps/antirustpaste-macos/Cargo.toml | head -n1)"
           if [ "$version" != "$cargo_version" ]; then
-            echo "::error::tag $tag does not match apps/rustclip-macos/Cargo.toml ($cargo_version); bump the version and commit before tagging"
+            echo "::error::tag $tag does not match apps/antirustpaste-macos/Cargo.toml ($cargo_version); bump the version and commit before tagging"
             exit 1
           fi
 
@@ -79,7 +79,7 @@ jobs:
 
       - name: Build the app bundle
         env:
-          RUSTCLIP_UNIVERSAL: "1"
+          ANTIRUSTPASTE_UNIVERSAL: "1"
         run: ./make-app.sh
 
       - name: Verify version and architectures

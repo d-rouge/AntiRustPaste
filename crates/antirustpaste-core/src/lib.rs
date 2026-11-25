@@ -1,7 +1,7 @@
 //! Platform-neutral AntiRustPaste domain.
 //!
 //! Nothing in this crate may depend on AppKit, Win32, GTK or another UI
-//! framework. Platform shells (`apps/rustclip-*`) own tray icons, popups,
+//! framework. Platform shells (`apps/antirustpaste-*`) own tray icons, popups,
 //! native clipboard access, global hotkeys and accessibility permissions.
 
 pub mod filter;

@@ -15,9 +15,9 @@ use std::io::Write;
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
 
-use rustclip_imaging::decode_rgb;
+use antirustpaste_imaging::decode_rgb;
 
-/// One selected image. PNG, TIFF and JPEG are decoded by `rustclip-imaging`.
+/// One selected image. PNG, TIFF and JPEG are decoded by `antirustpaste-imaging`.
 #[derive(Clone, Debug)]
 pub struct PdfImage {
     pub bytes: Vec<u8>,

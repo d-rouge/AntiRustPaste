@@ -13,7 +13,7 @@ AntiRustPaste's docs are split by audience. Read the first two before changing c
 | [Releasing](releasing.md) | maintainers | Version tag, GitHub Actions build and release |
 | [Roadmap](../ROADMAP.md) | contributors, agents | Pinned entries, image export and open questions |
 | [Agent playbook](agent-playbook.md) | agents | Safe recipes, crash patterns, handoff checklist |
-| [rustclip-imaging](../crates/rustclip-imaging/README.md) | contributors | Pure-Rust image metadata and thumbnail API |
+| [antirustpaste-imaging](../crates/antirustpaste-imaging/README.md) | contributors | Pure-Rust image metadata and thumbnail API |
 
 All documentation in this repository is written in English. Repository-wide
 agent rules are in [`../AGENTS.md`](../AGENTS.md). Tool-specific entry points
@@ -22,10 +22,10 @@ agent rules are in [`../AGENTS.md`](../AGENTS.md). Tool-specific entry points
 The user-facing overview, requirements and keyboard map live in
 [`../README.md`](../README.md).
 
-## Current status (0.1.1)
+## Current status (0.2.0)
 
-Structure: workspace with `apps/rustclip-macos`, `crates/rustclip-core`,
-`crates/rustclip-imaging` and `crates/rustclip-pdf`. Only macOS is implemented; see
+Structure: workspace with `apps/antirustpaste-macos`, `crates/antirustpaste-core`,
+`crates/antirustpaste-imaging` and `crates/antirustpaste-pdf`. Only macOS is implemented; see
 [platforms.md](platforms.md).
 
 Working: menu-bar app, text/RTF/HTML/image/file capture, Text/Images tabs,

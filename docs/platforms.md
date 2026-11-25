@@ -1,6 +1,6 @@
 # Platforms
 
-> Last reviewed: 2026-11-25 · Version 0.1.1
+> Last reviewed: 2026-11-25 · Version 0.2.0
 
 AntiRustPaste is structured so the domain works on any desktop OS, while each OS has
 its own native shell. **Only macOS is implemented today.** Windows and Linux
@@ -11,7 +11,7 @@ have a defined place in the tree and a concrete list of work, but no code yet.
 ```
 Cargo.toml                       workspace only
 apps/
-  rustclip-macos/                implemented AppKit shell
+  antirustpaste-macos/                implemented AppKit shell
     src/app.rs                   status item, state, actions, timers
     src/views.rs                 NSPanel, history list, Preferences
     src/pasteboard.rs            NSPasteboard read/write
@@ -20,26 +20,26 @@ apps/
     src/settings.rs              NSUserDefaults + LaunchAgent
     src/thumbnails.rs            boot-cleared cache path + NSImage loader
 crates/
-  rustclip-core/                 platform-neutral domain
+  antirustpaste-core/                 platform-neutral domain
     src/store.rs                 Clip/Captured, JSON + blobs, dedup, trim
     src/settings.rs              Settings, IgnoredApp, Modifiers
     src/filter.rs                Section and search filtering
     src/thumbnails.rs            cache worker, jobs, prune, clear
-  rustclip-imaging/              pure-Rust image metadata + thumbnails
-  rustclip-pdf/                  pure-Rust image-to-PDF writer
+  antirustpaste-imaging/              pure-Rust image metadata + thumbnails
+  antirustpaste-pdf/                  pure-Rust image-to-PDF writer
 ```
 
-Future shells are added as `apps/rustclip-windows` and `apps/rustclip-linux`.
+Future shells are added as `apps/antirustpaste-windows` and `apps/antirustpaste-linux`.
 They depend on core; core never depends on a shell.
 
 ## Boundaries
 
-1. `rustclip-core` MUST NOT depend on AppKit, Win32, GTK, a UI toolkit, or a
+1. `antirustpaste-core` MUST NOT depend on AppKit, Win32, GTK, a UI toolkit, or a
    platform clipboard API. Its only dependencies are `serde`, `serde_json`,
-   `chrono`, `uuid`, `dirs` and `rustclip-imaging`.
-2. `rustclip-imaging` MUST NOT depend on a UI toolkit, filesystem or environment
+   `chrono`, `uuid`, `dirs` and `antirustpaste-imaging`.
+2. `antirustpaste-imaging` MUST NOT depend on a UI toolkit, filesystem or environment
    variables. It has `#![forbid(unsafe_code)]`.
-3. `rustclip-pdf` MUST NOT depend on a UI toolkit, filesystem or environment
+3. `antirustpaste-pdf` MUST NOT depend on a UI toolkit, filesystem or environment
    variables. It takes encoded image bytes and returns PDF bytes, and keeps
    `#![forbid(unsafe_code)]`.
 4. A platform shell owns:
@@ -71,9 +71,9 @@ They depend on core; core never depends on a shell.
 | Start at login | ✅ LaunchAgent | ⬜ Startup folder / Run key | ⬜ XDG autostart `.desktop` |
 | Thumbnail image loading | ✅ `NSImage` | ⬜ decoder → texture/bitmap | ⬜ decoder → texture/bitmap |
 | Thumbnail cache path | ✅ `/tmp/...` (boot-cleared) | ⬜ `%TEMP%\AntiRustPaste` | ⬜ `$XDG_CACHE_HOME`/tmp |
-| Image export to PDF | ✅ `rustclip-pdf` + `NSSavePanel` | ⬜ shell save dialog | ⬜ shell save dialog |
+| Image export to PDF | ✅ `antirustpaste-pdf` + `NSSavePanel` | ⬜ shell save dialog | ⬜ shell save dialog |
 | Quick Look preview | ✅ `QLPreviewPanel` | ⬜ shell preview | ⬜ shell preview |
-| Tests | ✅ 12 shell + 21 core + 12 imaging + 6 PDF | ⬜ | ⬜ |
+| Tests | ✅ 12 shell + 22 core + 12 imaging + 6 PDF | ⬜ | ⬜ |
 
 Legend: ✅ done, ⬜ not implemented.
 
@@ -94,7 +94,7 @@ Legend: ✅ done, ⬜ not implemented.
   original blobs, Flate-compressed RGB, atomic destination write.
 - Quick Look preview of the selected image with Space (Images tab) or ⌘Y.
 
-Files: `apps/rustclip-macos/src/`.
+Files: `apps/antirustpaste-macos/src/`.
 
 Known macOS gaps: no per-row accessibility elements in the hand-drawn list, no
 image grid, EXIF orientation is not applied, no encryption at rest, PDF export
@@ -119,14 +119,14 @@ For a new shell, evaluate these in order:
 
 AntiRustPaste's macOS shell deliberately keeps the native API: it needs exact UTIs,
 RTF/RTFD/HTML/file URLs, concealed-type handling and original encoded bytes.
-`rustclip-core` only sees `Captured`/`Clip`, so a future shell can choose any of
+`antirustpaste-core` only sees `Captured`/`Clip`, so a future shell can choose any of
 these without changing storage or UI code.
 
 ## Windows (not implemented)
 
 Recommended first tasks, in order:
 
-1. Create `apps/rustclip-windows` with a Win32 tray icon
+1. Create `apps/antirustpaste-windows` with a Win32 tray icon
    (`Shell_NotifyIcon`) and a native menu (`TrackPopupMenu`).
 2. Clipboard adapter: `AddClipboardFormatListener`, `GetClipboardData` for
    `CF_UNICODETEXT`, `CF_DIBV5`/PNG, RTF, HTML and `CF_HDROP`; write the same
@@ -166,9 +166,9 @@ Start with **X11**, then add Wayland deliberately:
 5. Paste:
    - X11: XTest.
    - Wayland: portal/`ydotool`; do not assume it works everywhere.
-6. Settings: JSON under `$XDG_CONFIG_HOME/rustclip/settings.json`.
-7. Login item: `$XDG_CONFIG_HOME/autostart/rustclip.desktop`.
-8. Thumbnail cache: `$XDG_CACHE_HOME/rustclip/thumbnails` or a boot-cleared
+6. Settings: JSON under `$XDG_CONFIG_HOME/antirustpaste/settings.json`.
+7. Login item: `$XDG_CONFIG_HOME/autostart/antirustpaste.desktop`.
+8. Thumbnail cache: `$XDG_CACHE_HOME/antirustpaste/thumbnails` or a boot-cleared
    temporary directory; use one worker from core.
 
 Linux is the hardest platform because of tray click delivery and Wayland input
@@ -186,7 +186,7 @@ desktop/compositor in the PR/handoff.
 - `Section` and `filter_indices(clips, section, query)`.
 - `ThumbnailService` with one worker, pending-job de-duplication, generation
   epochs, prune and clear; `prune_now(dir, valid)` for startup.
-- `rustclip_imaging::info` and `thumbnail_png` with 32 MP/512 px caps.
+- `antirustpaste_imaging::info` and `thumbnail_png` with 32 MP/512 px caps.
 
 ## What every shell still has to implement
 
@@ -202,13 +202,13 @@ desktop/compositor in the PR/handoff.
 
 ## Adding a platform: checklist
 
-- [ ] Create `apps/rustclip-<os>/Cargo.toml` depending on `rustclip-core` and
-      `rustclip-imaging`; add it to workspace `members`.
+- [ ] Create `apps/antirustpaste-<os>/Cargo.toml` depending on `antirustpaste-core` and
+      `antirustpaste-imaging`; add it to workspace `members`.
 - [ ] Implement `main` with `--help`/`--version` and the same environment hooks
       where meaningful.
-- [ ] Map native clipboard formats ↔ `rustclip_core::Captured`/`Clip`; keep the
+- [ ] Map native clipboard formats ↔ `antirustpaste_core::Captured`/`Clip`; keep the
       25-item and 50 MiB limits.
-- [ ] Map native modifier flags ↔ `rustclip_core::Modifiers`; migrate old
+- [ ] Map native modifier flags ↔ `antirustpaste_core::Modifiers`; migrate old
       settings if needed.
 - [ ] Reuse core filtering, storage and thumbnail worker; do not duplicate them.
 - [ ] Implement tray + popup, including click-to-toggle and click-away.
@@ -223,13 +223,13 @@ desktop/compositor in the PR/handoff.
 
 | Variable | Scope | Meaning |
 | --- | --- | --- |
-| `RUSTCLIP_DATA_DIR` | core | history directory override |
-| `RUSTCLIP_DEFAULTS_SUITE` | macOS shell | isolated `NSUserDefaults` suite |
-| `RUSTCLIP_LAUNCH_AGENT_DIR` | macOS shell | login-item plist directory |
-| `RUSTCLIP_THUMB_CACHE_DIR` | macOS shell | absolute, dedicated thumbnail cache |
-| `RUSTCLIP_OPEN_PREFS` | macOS shell | automation: open Preferences |
-| `RUSTCLIP_OPEN_PANEL` | macOS shell | automation: open popup |
-| `RUSTCLIP_OPEN_IMAGES` | macOS shell | automation: open popup on Images |
+| `ANTIRUSTPASTE_DATA_DIR` | core | history directory override |
+| `ANTIRUSTPASTE_DEFAULTS_SUITE` | macOS shell | isolated `NSUserDefaults` suite |
+| `ANTIRUSTPASTE_LAUNCH_AGENT_DIR` | macOS shell | login-item plist directory |
+| `ANTIRUSTPASTE_THUMB_CACHE_DIR` | macOS shell | absolute, dedicated thumbnail cache |
+| `ANTIRUSTPASTE_OPEN_PREFS` | macOS shell | automation: open Preferences |
+| `ANTIRUSTPASTE_OPEN_PANEL` | macOS shell | automation: open popup |
+| `ANTIRUSTPASTE_OPEN_IMAGES` | macOS shell | automation: open popup on Images |
 
-Future shells should keep `RUSTCLIP_DATA_DIR` and add equivalents for their
+Future shells should keep `ANTIRUSTPASTE_DATA_DIR` and add equivalents for their
 native settings/login-item locations.

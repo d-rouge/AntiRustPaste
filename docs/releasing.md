@@ -6,23 +6,23 @@ signing keys or repository secrets are required: the workflow uses the built-in
 
 ## Cut a release
 
-1. Bump the version in `apps/rustclip-macos/Cargo.toml` (and keep `Cargo.lock`
+1. Bump the version in `apps/antirustpaste-macos/Cargo.toml` (and keep `Cargo.lock`
    in sync by building once). The tag must match this version exactly.
 2. Run the checks locally: `./scripts/check.sh`.
 3. Commit and push the bump to `main`.
 4. Create and push an annotated tag:
 
    ```sh
-   git tag -a v0.1.0 -m "AntiRustPaste 0.1.0"
-   git push origin v0.1.0
+   git tag -a v0.2.0 -m "AntiRustPaste 0.2.0"
+   git push origin v0.2.0
    ```
 
 5. Watch the **Release** workflow in the Actions tab. The tag push runs three
    jobs:
    - **Resolve version** — rejects a tag that does not look like `vX.Y.Z` or
-     does not match `apps/rustclip-macos/Cargo.toml`.
+     does not match `apps/antirustpaste-macos/Cargo.toml`.
    - **Build universal app** — installs Rust, runs `./scripts/check.sh`, builds
-     with `RUSTCLIP_UNIVERSAL=1 ./make-app.sh`, verifies the bundle version and
+     with `ANTIRUSTPASTE_UNIVERSAL=1 ./make-app.sh`, verifies the bundle version and
      that the binary contains both `arm64` and `x86_64`, then packages
      `AntiRustPaste-<version>-universal.zip`, `AntiRustPaste-<version>-universal.dmg` and
      `SHA256SUMS.txt`.
@@ -33,7 +33,7 @@ signing keys or repository secrets are required: the workflow uses the built-in
 ## Re-running a release
 
 - From the Actions tab, run **Release** with `workflow_dispatch` and the
-  existing tag (for example `v0.1.0`). The workflow rebuilds and replaces the
+  existing tag (for example `v0.2.0`). The workflow rebuilds and replaces the
   assets; the release body is kept.
 - To regenerate the notes as well, delete the release on GitHub and re-run the
   workflow for the same tag.
@@ -44,8 +44,8 @@ signing keys or repository secrets are required: the workflow uses the built-in
 
 ```sh
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
-RUSTCLIP_UNIVERSAL=1 ./make-app.sh
-lipo -archs dist/AntiRustPaste.app/Contents/MacOS/rustclip
+ANTIRUSTPASTE_UNIVERSAL=1 ./make-app.sh
+lipo -archs dist/AntiRustPaste.app/Contents/MacOS/antirustpaste
 ```
 
 ## Signing and first launch

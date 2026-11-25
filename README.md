@@ -77,7 +77,7 @@ The build is ad-hoc signed but not notarized: on first launch, right-click
 ## Build and run
 
 ```sh
-cargo run -p rustclip
+cargo run -p antirustpaste
 ```
 
 For a real app bundle:
@@ -93,8 +93,8 @@ Because it is an accessory app, there is no Dock icon: look for the clipboard
 symbol in the menu bar. Left-click opens the history, right-click opens the
 status menu.
 
-`rustclip --help` lists the test/automation environment variables;
-`rustclip --version` prints the version.
+`antirustpaste --help` lists the test/automation environment variables;
+`antirustpaste --version` prints the version.
 
 ### Checks
 
@@ -112,14 +112,14 @@ Never point a development run at your real data. The four overrides are:
 
 | Variable | Effect |
 | --- | --- |
-| `RUSTCLIP_DATA_DIR` | History directory |
-| `RUSTCLIP_DEFAULTS_SUITE` | Isolated `NSUserDefaults` suite |
-| `RUSTCLIP_LAUNCH_AGENT_DIR` | Directory for the login-item plist |
-| `RUSTCLIP_THUMB_CACHE_DIR` | Absolute, dedicated thumbnail cache directory |
+| `ANTIRUSTPASTE_DATA_DIR` | History directory |
+| `ANTIRUSTPASTE_DEFAULTS_SUITE` | Isolated `NSUserDefaults` suite |
+| `ANTIRUSTPASTE_LAUNCH_AGENT_DIR` | Directory for the login-item plist |
+| `ANTIRUSTPASTE_THUMB_CACHE_DIR` | Absolute, dedicated thumbnail cache directory |
 
 Root/temp-root/home and relative cache paths are ignored; the default `/tmp`
-location is used instead. `RUSTCLIP_OPEN_PREFS=1`, `RUSTCLIP_OPEN_PANEL=1` and
-`RUSTCLIP_OPEN_IMAGES=1` open those surfaces after launch for automation. See
+location is used instead. `ANTIRUSTPASTE_OPEN_PREFS=1`, `ANTIRUSTPASTE_OPEN_PANEL=1` and
+`ANTIRUSTPASTE_OPEN_IMAGES=1` open those surfaces after launch for automation. See
 [docs/testing.md](docs/testing.md) before any manual GUI test.
 
 ## Keyboard
@@ -138,8 +138,11 @@ location is used instead. `RUSTCLIP_OPEN_PREFS=1`, `RUSTCLIP_OPEN_PANEL=1` and
 ## Storage
 
 ```
-~/Library/Application Support/RustClip/history.json   # index
-~/Library/Application Support/RustClip/blobs/*.bin    # images / RTF / HTML
+~/Library/Application Support/AntiRustPaste/history.json   # index
+~/Library/Application Support/AntiRustPaste/blobs/*.bin    # images / RTF / HTML
+
+Upgrading from 0.1.x renames the old `Application Support/RustClip` directory
+once, automatically; no history is copied or deleted by hand.
 /tmp/AntiRustPaste-<user>-<hash>/thumbnails/thumb-*.png     # macOS, boot-cleared
 ```
 
@@ -158,23 +161,23 @@ Start at login writes:
 
 ```
 Cargo.toml                  workspace only
-apps/rustclip-macos/        AppKit shell (menu bar, popup, native services)
-crates/rustclip-core/       platform-neutral model, storage, settings, filters, thumbnails
-crates/rustclip-imaging/    pure-Rust image metadata and thumbnails
+apps/antirustpaste-macos/        AppKit shell (menu bar, popup, native services)
+crates/antirustpaste-core/       platform-neutral model, storage, settings, filters, thumbnails
+crates/antirustpaste-imaging/    pure-Rust image metadata and thumbnails
 ```
 
 | Path | Purpose |
 | --- | --- |
-| `apps/rustclip-macos/src/main.rs` | Entry point |
-| `apps/rustclip-macos/src/app.rs` | App delegate, state, polling, popup/preferences actions |
-| `apps/rustclip-macos/src/views.rs` | Objective-C classes for the popup, list views, preferences |
-| `apps/rustclip-macos/src/pasteboard.rs` | Pasteboard reading and writing |
-| `apps/rustclip-macos/src/paste.rs` | CoreGraphics ⌘V synthesis, Accessibility prompt |
-| `apps/rustclip-macos/src/hotkey.rs` | Carbon `RegisterEventHotKey` wrapper |
-| `apps/rustclip-macos/src/settings.rs` | User defaults, modifier migration, LaunchAgent |
-| `apps/rustclip-macos/src/thumbnails.rs` | Boot-cleared cache path and AppKit image loading |
-| `crates/rustclip-core` | `Clip`/`Store`, settings, filtering, thumbnail worker |
-| `crates/rustclip-imaging` | Pure-Rust image metadata and thumbnail generation (`image` crate) |
+| `apps/antirustpaste-macos/src/main.rs` | Entry point |
+| `apps/antirustpaste-macos/src/app.rs` | App delegate, state, polling, popup/preferences actions |
+| `apps/antirustpaste-macos/src/views.rs` | Objective-C classes for the popup, list views, preferences |
+| `apps/antirustpaste-macos/src/pasteboard.rs` | Pasteboard reading and writing |
+| `apps/antirustpaste-macos/src/paste.rs` | CoreGraphics ⌘V synthesis, Accessibility prompt |
+| `apps/antirustpaste-macos/src/hotkey.rs` | Carbon `RegisterEventHotKey` wrapper |
+| `apps/antirustpaste-macos/src/settings.rs` | User defaults, modifier migration, LaunchAgent |
+| `apps/antirustpaste-macos/src/thumbnails.rs` | Boot-cleared cache path and AppKit image loading |
+| `crates/antirustpaste-core` | `Clip`/`Store`, settings, filtering, thumbnail worker |
+| `crates/antirustpaste-imaging` | Pure-Rust image metadata and thumbnail generation (`image` crate) |
 
 ## Known gaps
 
@@ -202,9 +205,9 @@ crates/rustclip-imaging/    pure-Rust image metadata and thumbnails
 - Thumbnail decoding lives in a pure-Rust crate with `#![forbid(unsafe_code)]`,
   so it can be tested and reused outside macOS. Its only new dependency is
   `image` (MIT OR Apache-2.0); see [THIRD_PARTY.md](THIRD_PARTY.md).
-- One `rustclip-thumbnails` worker handles decode/cache I/O; AppKit stays on the
+- One `antirustpaste-thumbnails` worker handles decode/cache I/O; AppKit stays on the
   main thread.
 - The default macOS cache is under `/tmp`, which the OS clears at boot. An
-  explicit `RUSTCLIP_THUMB_CACHE_DIR` override is not boot-cleared.
+  explicit `ANTIRUSTPASTE_THUMB_CACHE_DIR` override is not boot-cleared.
 - This is an independent reimplementation: it shares no code, assets or wording
   with CopyClip.

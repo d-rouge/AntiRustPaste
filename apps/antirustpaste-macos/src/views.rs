@@ -9,7 +9,7 @@ use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_se
 use objc2_app_kit::*;
 use objc2_foundation::*;
 
-use rustclip_core::{Clip, ClipKind, human_size};
+use antirustpaste_core::{Clip, ClipKind, human_size};
 
 use crate::app::{
     self, AppState, ClipboardSection, LIST_BOTTOM, LIST_HEADER_H, ListLayout, PANEL_H, PANEL_W,
@@ -1506,7 +1506,7 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
     ));
 
     general.addSubview(&secondary_label(
-        "History is stored in ~/Library/Application Support/RustClip",
+        "History is stored in ~/Library/Application Support/AntiRustPaste",
         NSRect::new(NSPoint::new(16.0, 88.0), NSSize::new(436.0, 18.0)),
         11.0,
         mtm,

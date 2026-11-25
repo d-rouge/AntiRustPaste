@@ -7,7 +7,7 @@
 use std::ffi::c_void;
 use std::ptr::null_mut;
 
-use rustclip_core::Modifiers;
+use antirustpaste_core::Modifiers;
 
 type OSStatus = i32;
 type EventRef = *mut c_void;

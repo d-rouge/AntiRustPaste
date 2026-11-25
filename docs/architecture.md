@@ -1,49 +1,49 @@
 # Architecture
 
-> Last reviewed: 2026-11-25 · Version 0.1.1
+> Last reviewed: 2026-11-25 · Version 0.2.0
 
 AntiRustPaste is a single-process macOS accessory app. AppKit runs the main loop and
 a repeating `NSTimer` polls the pasteboard. There is no webview, database engine
 or async runtime. One background worker exists for thumbnails: it reads blobs,
-decodes them with `rustclip-imaging` and writes cache files; it never touches
+decodes them with `antirustpaste-imaging` and writes cache files; it never touches
 AppKit or `AppState`.
 
 The repository is a Cargo workspace:
 
-- `apps/rustclip-macos` — the implemented AppKit shell;
-- `crates/rustclip-core` — platform-neutral model, storage, settings, filtering
+- `apps/antirustpaste-macos` — the implemented AppKit shell;
+- `crates/antirustpaste-core` — platform-neutral model, storage, settings, filtering
   and thumbnail worker;
-- `crates/rustclip-imaging` — a pure-Rust, `#![forbid(unsafe_code)]` codec with
+- `crates/antirustpaste-imaging` — a pure-Rust, `#![forbid(unsafe_code)]` codec with
   no AppKit, filesystem or environment access;
-- `crates/rustclip-pdf` — a pure-Rust, `#![forbid(unsafe_code)]` PDF writer for
+- `crates/antirustpaste-pdf` — a pure-Rust, `#![forbid(unsafe_code)]` PDF writer for
   the image export, with no AppKit, filesystem or environment access.
 
-Future Windows/Linux shells are `apps/rustclip-<os>`. They depend on core; core
+Future Windows/Linux shells are `apps/antirustpaste-<os>`. They depend on core; core
 never depends on a shell. See [platforms.md](platforms.md).
 
 ## Module map
 
 | Module | Responsibility |
 | --- | --- |
-| `apps/rustclip-macos/src/main.rs` | `--help`/`--version`; starts `app::run()` |
-| `apps/rustclip-macos/src/app.rs` | `NSApplicationDelegate`, thread-local `AppState`, status item and menu, clipboard polling, hot key, keyboard handling, all user actions, panic guards |
-| `apps/rustclip-macos/src/views.rs` | Objective-C classes: `RCClipPanel`, `RCClipListView`, `RCIgnoredAppsView`, `RCPanelDelegate`; construction of the popup and Preferences window |
-| `apps/rustclip-macos/src/pasteboard.rs` | Reads and writes `NSPasteboard` with type/size limits |
-| `apps/rustclip-macos/src/paste.rs` | CoreGraphics ⌘V synthesis and the Accessibility trust prompt |
-| `apps/rustclip-macos/src/hotkey.rs` | Carbon `RegisterEventHotKey` wrapper and shortcut formatting |
-| `apps/rustclip-macos/src/settings.rs` | `NSUserDefaults` keys, modifier migration, LaunchAgent management |
-| `apps/rustclip-macos/src/thumbnails.rs` | Boot-cleared cache path, private directory policy, `NSImage` loading |
-| `crates/rustclip-core/src/store.rs` | `Clip`/`Captured`, JSON index, blob files, dedup, trim, clear, previews, relative time |
-| `crates/rustclip-core/src/settings.rs` | Platform-neutral `Settings`, `IgnoredApp`, `Modifiers` bits |
-| `crates/rustclip-core/src/filter.rs` | `Section` (Text/Images) and search filtering |
-| `crates/rustclip-core/src/thumbnails.rs` | Thumbnail worker, file cache, prune/clear, generation epochs |
-| `crates/rustclip-imaging` | Pure-Rust image metadata, thumbnails and RGB decoding (`image` crate) |
-| `crates/rustclip-pdf` | PDF container, A4 page layout and Flate-compressed image embedding |
+| `apps/antirustpaste-macos/src/main.rs` | `--help`/`--version`; starts `app::run()` |
+| `apps/antirustpaste-macos/src/app.rs` | `NSApplicationDelegate`, thread-local `AppState`, status item and menu, clipboard polling, hot key, keyboard handling, all user actions, panic guards |
+| `apps/antirustpaste-macos/src/views.rs` | Objective-C classes: `RCClipPanel`, `RCClipListView`, `RCIgnoredAppsView`, `RCPanelDelegate`; construction of the popup and Preferences window |
+| `apps/antirustpaste-macos/src/pasteboard.rs` | Reads and writes `NSPasteboard` with type/size limits |
+| `apps/antirustpaste-macos/src/paste.rs` | CoreGraphics ⌘V synthesis and the Accessibility trust prompt |
+| `apps/antirustpaste-macos/src/hotkey.rs` | Carbon `RegisterEventHotKey` wrapper and shortcut formatting |
+| `apps/antirustpaste-macos/src/settings.rs` | `NSUserDefaults` keys, modifier migration, LaunchAgent management |
+| `apps/antirustpaste-macos/src/thumbnails.rs` | Boot-cleared cache path, private directory policy, `NSImage` loading |
+| `crates/antirustpaste-core/src/store.rs` | `Clip`/`Captured`, JSON index, blob files, dedup, trim, clear, previews, relative time |
+| `crates/antirustpaste-core/src/settings.rs` | Platform-neutral `Settings`, `IgnoredApp`, `Modifiers` bits |
+| `crates/antirustpaste-core/src/filter.rs` | `Section` (Text/Images) and search filtering |
+| `crates/antirustpaste-core/src/thumbnails.rs` | Thumbnail worker, file cache, prune/clear, generation epochs |
+| `crates/antirustpaste-imaging` | Pure-Rust image metadata, thumbnails and RGB decoding (`image` crate) |
+| `crates/antirustpaste-pdf` | PDF container, A4 page layout and Flate-compressed image embedding |
 
 `app.rs` is the macOS hub. Nothing else calls AppKit directly except `views.rs`
 (views), `thumbnails.rs` (loading a finished PNG into `NSImage` on the main
-thread) and `pasteboard.rs` (the pasteboard). `rustclip-core`,
-`rustclip-imaging`, `rustclip-pdf` and the pure parts of `hotkey.rs` have no
+thread) and `pasteboard.rs` (the pasteboard). `antirustpaste-core`,
+`antirustpaste-imaging`, `antirustpaste-pdf` and the pure parts of `hotkey.rs` have no
 AppKit dependency.
 `docs/platforms.md` lists what every future shell must implement.
 
@@ -67,11 +67,11 @@ main
                 ├── install AppState in the thread-local (starts the thumbnail worker)
                 ├── install key monitor, 1 s pasteboard poll and 0.1 s thumbnail drain
                 ├── register the Carbon hot key
-                └── optional automation hooks (RUSTCLIP_OPEN_*)
+                └── optional automation hooks (ANTIRUSTPASTE_OPEN_*)
 ```
 
 Autorelease pools and AppKit objects are created on the main thread. The only
-extra thread is the named `rustclip-thumbnails` worker started by
+extra thread is the named `antirustpaste-thumbnails` worker started by
 `ThumbnailService::new`; every AppKit callback into Rust is still on the main
 thread. PDF export does not add a worker: it encodes on the main thread after
 the save dialog closes.
@@ -101,7 +101,7 @@ guarantees the thread.
 ### Thumbnail worker
 
 ```
-main thread                              rustclip-thumbnails worker
+main thread                              antirustpaste-thumbnails worker
 -----------                              --------------------------
 draw Images row
   ├─ in-memory hit? draw
@@ -109,7 +109,7 @@ draw Images row
   └─ miss: send Generate(hash, blob)
        pending.insert(hash)
                                       read blob (<= 64 MiB)
-                                      rustclip_imaging::thumbnail_png
+                                      antirustpaste_imaging::thumbnail_png
                                       write cache/thumb-<hash>.png atomically
                                       send JobResult(hash, ok, generation)
 0.1 s timer: drain
@@ -209,7 +209,7 @@ delegates are not retained.
 ```
 pasteboard PNG/TIFF/JPEG
  └── pasteboard::read_items
-      ├── rustclip_imaging::info(bytes) -> width, height (32 MP cap)
+      ├── antirustpaste_imaging::info(bytes) -> width, height (32 MP cap)
       └── Clip { kind: Image, width, height, blob, hash }
            └── thumbnail view (Images tab)
                 ├── in-memory HashMap<hash, NSImage> hit -> draw
@@ -221,7 +221,7 @@ pasteboard PNG/TIFF/JPEG
                            └── 0.1 s drain -> NSImage on main -> redraw
 ```
 
-- Cache location: an absolute, dedicated `RUSTCLIP_THUMB_CACHE_DIR`, otherwise on macOS
+- Cache location: an absolute, dedicated `ANTIRUSTPASTE_THUMB_CACHE_DIR`, otherwise on macOS
   `/tmp/AntiRustPaste-<user>-<hash>/thumbnails`. macOS clears `/tmp` at boot, so this
   guarantees the cache is gone after a reboot. Other platforms use the OS temp
   directory. For the default location the directory and its parent are private
@@ -259,7 +259,7 @@ PDF window
   ├── Save PDF… (⌘S)       -> NSSavePanel::runModal
   │     └── app::save_pdf
   │          ├── read original blobs inside one with_state borrow
-  │          ├── rustclip_pdf::write_pdf (decode, lay out, deflate)
+  │          ├── antirustpaste_pdf::write_pdf (decode, lay out, deflate)
   │          └── write to `<name>.pdf.tmp`, then rename over the destination
   └── Cancel / esc / close -> close_pdf_export (orders the window out)
 ```
@@ -315,13 +315,13 @@ QLPreviewPanel
 
 ## Storage
 
-`rustclip_core::Store` uses `dirs::data_dir()/AntiRustPaste` by default, so each shell
+`antirustpaste_core::Store` uses `dirs::data_dir()/AntiRustPaste` by default, so each shell
 gets its platform data directory: on macOS `~/Library/Application
 Support/AntiRustPaste/`, Windows `%APPDATA%\AntiRustPaste\`, Linux
-`$XDG_DATA_HOME/rustclip/` (or the platform equivalent). `RUSTCLIP_DATA_DIR`
+`$XDG_DATA_HOME/antirustpaste/` (or the platform equivalent). `ANTIRUSTPASTE_DATA_DIR`
 overrides it.
 
-On macOS the default is `~/Library/Application Support/RustClip/`.
+On macOS the default is `~/Library/Application Support/AntiRustPaste/`.
 
 ```
 history.json     ordered array of Clip records, newest first
@@ -349,18 +349,18 @@ version field; adding one is the first step before any breaking change.
 
 ## Preferences and login item
 
-The **model** lives in `rustclip-core::Settings` and uses platform-neutral
+The **model** lives in `antirustpaste-core::Settings` and uses platform-neutral
 `Modifiers` bits. The **macOS persistence** in
-`apps/rustclip-macos/src/settings.rs` stores keys in `NSUserDefaults`
+`apps/antirustpaste-macos/src/settings.rs` stores keys in `NSUserDefaults`
 (`maxClips`, `recordClips`, `confirmDelete`, `startAtLogin`, `ignoredApps`,
 `hotkeyKeyCode`, `hotkeyModifiers`, `hotkeyDisplay`, `hotkeyEnabled`), migrates
-old NSEvent modifier values and redirects to `RUSTCLIP_DEFAULTS_SUITE` in tests.
+old NSEvent modifier values and redirects to `ANTIRUSTPASTE_DEFAULTS_SUITE` in tests.
 Future shells implement their own persistence for the same core model.
 
 Start at login writes `~/Library/LaunchAgents/com.rustclip.app.plist` with the
 current executable path and `RunAtLoad`. It deliberately does **not** run
 `launchctl`, so enabling the option cannot kill or duplicate the running app.
-`RUSTCLIP_LAUNCH_AGENT_DIR` redirects the path in tests.
+`ANTIRUSTPASTE_LAUNCH_AGENT_DIR` redirects the path in tests.
 
 ## Global shortcut
 

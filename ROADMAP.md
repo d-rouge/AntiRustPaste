@@ -43,7 +43,7 @@ removed only by an explicit delete or clear action.
 
 ### Data model
 
-- Add `pinned: bool` with `#[serde(default)]` to `rustclip_core::Clip` (and
+- Add `pinned: bool` with `#[serde(default)]` to `antirustpaste_core::Clip` (and
   `Captured` if capture needs an initial value), so existing histories load
   without migration.
 - Add ordered access helpers in core, e.g. `Store::ordered_indices(section)` or
@@ -84,9 +84,9 @@ removed only by an explicit delete or clear action.
   **Select None** (⌘D), **Save PDF…** (⌘S) and **Cancel**/esc.
 - The system save dialog (`NSSavePanel`) writes the file; the default name is
   `Clipboard Images.pdf`.
-- `crates/rustclip-pdf` is a pure-Rust, `#![forbid(unsafe_code)]` writer: one A4
+- `crates/antirustpaste-pdf` is a pure-Rust, `#![forbid(unsafe_code)]` writer: one A4
   page per image, 12 mm margins, aspect ratio preserved, original blobs decoded
-  through `rustclip-imaging`, RGB samples compressed with Flate. Images larger
+  through `antirustpaste-imaging`, RGB samples compressed with Flate. Images larger
   than the printable area are scaled to fit; smaller ones keep their native
   size.
 - The PDF is written to `<name>.pdf.tmp` and renamed into place; cancelling the
@@ -142,7 +142,7 @@ removed only by an explicit delete or clear action.
 - PDF generation belongs in a portable crate; the selection window and save
   dialog belong to each platform shell.
 - Do not implement these only in the macOS shell if the core can own the rules.
-  Add tests to `rustclip-core` and `rustclip-pdf`.
+  Add tests to `antirustpaste-core` and `antirustpaste-pdf`.
 
 ## Non-goals for this roadmap
 

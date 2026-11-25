@@ -1,6 +1,6 @@
 # Testing
 
-> Last reviewed: 2026-11-25 · Version 0.1.1
+> Last reviewed: 2026-11-25 · Version 0.2.0
 
 AntiRustPaste is a macOS GUI app, but most of its logic is testable without a screen.
 The goal is deterministic local checks, with a small, explicit manual matrix for
@@ -22,16 +22,16 @@ Current unit tests cover:
 
 | Crate | Area | Behaviour |
 | --- | --- | --- |
-| `rustclip-core` | `store` | Preview, dedup, pinned ordering/trim exemption, trim/clear blobs, corrupt index, missing blobs, legacy records, blob traversal |
-| `rustclip-core` | `settings` | Ignored-app dedup/sort, platform-neutral modifier bits |
-| `rustclip-core` | `filter` | Text/Images sections, query across preview/text/source |
-| `rustclip-core` | `thumbnails` | Cache naming, prune, blob→thumbnail generation, background worker result, clear |
-| `rustclip-imaging` | codec | PNG/TIFF/JPEG metadata, aspect-preserving thumbnails, no upscaling, hostile inputs, dimension caps, RGB decode with alpha composited onto white |
-| `rustclip-pdf` | export | Empty selection, invalid image, one page per image, upright image transform, cross-reference offsets point at every object |
-| `rustclip` (macOS) | `settings` | Legacy NSEvent modifier migration |
-| `rustclip` (macOS) | `hotkey` | Shortcut formatting, Carbon modifier mapping |
-| `rustclip` (macOS) | `thumbnails` | Unsafe cache roots, filesystem-safe user key |
-| `rustclip` (macOS) | `app` | PDF destination is replaced atomically; a missing directory is reported without leaving a file; drag moves shift rows in both directions; order keeps drags and appends new images; list layout headers, card, hit-testing and visible range |
+| `antirustpaste-core` | `store` | Preview, dedup, pinned ordering/trim exemption, trim/clear blobs, corrupt index, missing blobs, legacy records, blob traversal |
+| `antirustpaste-core` | `settings` | Ignored-app dedup/sort, platform-neutral modifier bits |
+| `antirustpaste-core` | `filter` | Text/Images sections, query across preview/text/source |
+| `antirustpaste-core` | `thumbnails` | Cache naming, prune, blob→thumbnail generation, background worker result, clear |
+| `antirustpaste-imaging` | codec | PNG/TIFF/JPEG metadata, aspect-preserving thumbnails, no upscaling, hostile inputs, dimension caps, RGB decode with alpha composited onto white |
+| `antirustpaste-pdf` | export | Empty selection, invalid image, one page per image, upright image transform, cross-reference offsets point at every object |
+| `antirustpaste` (macOS) | `settings` | Legacy NSEvent modifier migration |
+| `antirustpaste` (macOS) | `hotkey` | Shortcut formatting, Carbon modifier mapping |
+| `antirustpaste` (macOS) | `thumbnails` | Unsafe cache roots, filesystem-safe user key |
+| `antirustpaste` (macOS) | `app` | PDF destination is replaced atomically; a missing directory is reported without leaving a file; drag moves shift rows in both directions; order keeps drags and appends new images; list layout headers, card, hit-testing and visible range |
 
 Tests that touch the filesystem use `std::env::temp_dir()` plus a UUID and remove
 their directory. They never call AppKit or touch the pasteboard. The PDF tests
@@ -43,9 +43,9 @@ to confirm page size, margins, colour and upright orientation.
 
 ```sh
 ./scripts/smoke.sh
-RUSTCLIP_SMOKE_PREFS=1 ./scripts/smoke.sh   # also opens Preferences
-RUSTCLIP_SMOKE_PANEL=1 ./scripts/smoke.sh   # also opens the history popup
-RUSTCLIP_SMOKE_IMAGES=1 ./scripts/smoke.sh  # opens the popup on Images
+ANTIRUSTPASTE_SMOKE_PREFS=1 ./scripts/smoke.sh   # also opens Preferences
+ANTIRUSTPASTE_SMOKE_PANEL=1 ./scripts/smoke.sh   # also opens the history popup
+ANTIRUSTPASTE_SMOKE_IMAGES=1 ./scripts/smoke.sh  # opens the popup on Images
 ```
 
 The script sets all four isolation variables (history, defaults, login item and
@@ -61,11 +61,11 @@ screen or grants Accessibility. Use a scratch history:
 
 ```sh
 SCRATCH="$(mktemp -d)"
-RUSTCLIP_DATA_DIR="$SCRATCH/data" \
-RUSTCLIP_DEFAULTS_SUITE="com.rustclip.test.$$" \
-RUSTCLIP_LAUNCH_AGENT_DIR="$SCRATCH/LaunchAgents" \
-RUSTCLIP_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
-./target/debug/rustclip
+ANTIRUSTPASTE_DATA_DIR="$SCRATCH/data" \
+ANTIRUSTPASTE_DEFAULTS_SUITE="com.antirustpaste.test.$$" \
+ANTIRUSTPASTE_LAUNCH_AGENT_DIR="$SCRATCH/LaunchAgents" \
+ANTIRUSTPASTE_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
+./target/debug/antirustpaste
 ```
 
 | # | Check | Expected |
@@ -85,11 +85,11 @@ RUSTCLIP_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
 | 13 | Record a new shortcut | Old one stops working, new one opens the popup |
 | 14 | Turn recording off, copy, turn it on | Nothing captured while off; later copies captured |
 | 15 | Open Preferences twice | Same window is reused, no duplicate windows |
-| 16 | Start at login toggle with scratch `RUSTCLIP_LAUNCH_AGENT_DIR` | Plist created/removed only in the scratch directory |
+| 16 | Start at login toggle with scratch `ANTIRUSTPASTE_LAUNCH_AGENT_DIR` | Plist created/removed only in the scratch directory |
 | 17 | Copy a PNG/JPEG and a file in Finder | Image appears in Images, the file URL in Text; both paste back |
 | 18 | Copy from a password manager | Concealed item is not captured |
 | 19 | Switch to Images with the segmented control and ⌘1/⌘2 | Tab changes, search placeholder and footer update, selection resets |
-| 20 | Open Images with an image in history | `IMG` placeholder may appear first; thumbnail replaces it within ~0.1–1 s; cache file exists under `RUSTCLIP_THUMB_CACHE_DIR` |
+| 20 | Open Images with an image in history | `IMG` placeholder may appear first; thumbnail replaces it within ~0.1–1 s; cache file exists under `ANTIRUSTPASTE_THUMB_CACHE_DIR` |
 | 21 | Clear Thumbnail Cache in Preferences | Thumbnails disappear and regenerate in the background on the next draw; history remains |
 | 22 | Delete/clear/trim image clips | Their thumbnail files are pruned; no orphan files remain |
 | 22a | **Clear Text** with text + image clips | Text/HTML/RTF/file clips removed; images remain; button follows confirmation setting |
@@ -115,7 +115,7 @@ RUSTCLIP_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
 | 29 | Remove a selected blob behind the app, then save | Alert reports the problem, no partial PDF, export window stays open |
 
 After a manual run: quit the app, remove the scratch directory, and confirm no
-`rustclip` process remains. Do not run `pkill -f rustclip`; stop the PID you
+`antirustpaste` process remains. Do not run `pkill -f antirustpaste`; stop the PID you
 started.
 
 ## Hostile-input cases
@@ -153,12 +153,12 @@ crash fix.
 
 ## Safety rules for tests
 
-- Never point `RUSTCLIP_DATA_DIR` at the real `Application Support/RustClip`.
+- Never point `ANTIRUSTPASTE_DATA_DIR` at the real `Application Support/AntiRustPaste`.
 - Never change the real `com.rustclip.app` defaults in a test; use
-  `RUSTCLIP_DEFAULTS_SUITE`.
+  `ANTIRUSTPASTE_DEFAULTS_SUITE`.
 - Never write to the real `~/Library/LaunchAgents`; use
-  `RUSTCLIP_LAUNCH_AGENT_DIR`. Never run `launchctl`.
-- Prefer an absolute, dedicated `RUSTCLIP_THUMB_CACHE_DIR` pointing at a scratch
+  `ANTIRUSTPASTE_LAUNCH_AGENT_DIR`. Never run `launchctl`.
+- Prefer an absolute, dedicated `ANTIRUSTPASTE_THUMB_CACHE_DIR` pointing at a scratch
   directory; the cache contains private images. Root/temp-root/home and relative
   paths are ignored. Without the override macOS uses
   `/tmp/AntiRustPaste-<user>-<hash>/thumbnails`, which is boot-cleared but still
@@ -182,9 +182,9 @@ crash fix.
 4. Check whether the input was bounded (item count, byte size, index size, blob
    name).
 5. Add the failing input to the hostile-input table and, where possible, a unit
-   test (imaging failures belong in `crates/rustclip-imaging/src/lib.rs`; cache
-   path/pruning/worker failures in `crates/rustclip-core/src/thumbnails.rs`,
-   macOS image/cache policy in `apps/rustclip-macos/src/thumbnails.rs`).
+   test (imaging failures belong in `crates/antirustpaste-imaging/src/lib.rs`; cache
+   path/pruning/worker failures in `crates/antirustpaste-core/src/thumbnails.rs`,
+   macOS image/cache policy in `apps/antirustpaste-macos/src/thumbnails.rs`).
 6. If thumbnails stop appearing but the app is alive, check the stderr line
    `could not start thumbnail worker` or `thumbnail generation failed`; the
    worker is the only non-main thread.

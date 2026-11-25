@@ -1,23 +1,23 @@
 //! macOS thumbnail policy and AppKit image loading.
 //!
-//! The generation worker and file cache live in `rustclip_core::thumbnails`;
+//! The generation worker and file cache live in `antirustpaste_core::thumbnails`;
 //! this module only chooses the boot-cleared cache directory, validates an
 //! override, cleans the legacy location and turns PNG bytes into `NSImage`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use antirustpaste_core::ThumbnailService;
 use objc2::AnyThread;
 use objc2::rc::Retained;
 use objc2_app_kit::NSImage;
 use objc2_foundation::NSData;
-use rustclip_core::ThumbnailService;
 
-/// `RUSTCLIP_THUMB_CACHE_DIR` isolates the cache for agents and tests.
+/// `ANTIRUSTPASTE_THUMB_CACHE_DIR` isolates the cache for agents and tests.
 /// Without it, macOS uses `/tmp/AntiRustPaste-<user>-<hash>/thumbnails`, which the
 /// OS clears at boot. Other platforms use the OS temporary directory.
 pub fn cache_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("RUSTCLIP_THUMB_CACHE_DIR")
+    if let Some(dir) = std::env::var_os("ANTIRUSTPASTE_THUMB_CACHE_DIR")
         && !dir.is_empty()
     {
         let path = PathBuf::from(dir);
@@ -25,7 +25,7 @@ pub fn cache_dir() -> PathBuf {
             return path;
         }
         eprintln!(
-            "rustclip: ignoring RUSTCLIP_THUMB_CACHE_DIR; it must be an absolute, dedicated directory"
+            "antirustpaste: ignoring ANTIRUSTPASTE_THUMB_CACHE_DIR; it must be an absolute, dedicated directory"
         );
     }
     default_cache_dir()
@@ -73,7 +73,7 @@ pub fn cleanup_legacy_cache() {
 }
 
 pub fn prune_now(valid: &std::collections::HashSet<u64>) {
-    rustclip_core::thumbnails::prune_now(&cache_dir(), valid);
+    antirustpaste_core::thumbnails::prune_now(&cache_dir(), valid);
 }
 
 /// Quick Look preview files live beside the thumbnails so they are boot-cleared

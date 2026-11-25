@@ -1,6 +1,6 @@
 //! Platform-neutral thumbnail cache and background generation.
 //!
-//! Decoding lives in `rustclip-imaging`. This module owns the temporary cache,
+//! Decoding lives in `antirustpaste-imaging`. This module owns the temporary cache,
 //! the single generation worker and the job/result channels. A platform shell
 //! passes the cache directory (and can apply its own boot-clearing policy) and
 //! converts the returned PNG bytes into its native image type.
@@ -63,16 +63,16 @@ pub struct JobResult {
 }
 
 impl ThumbnailService {
-    /// Start the single `rustclip-thumbnails` worker for `dir`.
+    /// Start the single `antirustpaste-thumbnails` worker for `dir`.
     pub fn new(dir: PathBuf) -> Self {
         let (job_tx, job_rx) = channel();
         let (result_tx, result_rx) = channel();
         let worker_dir = dir.clone();
         if let Err(err) = std::thread::Builder::new()
-            .name("rustclip-thumbnails".to_string())
+            .name("antirustpaste-thumbnails".to_string())
             .spawn(move || worker(job_rx, result_tx, worker_dir))
         {
-            eprintln!("rustclip: could not start thumbnail worker: {err}");
+            eprintln!("antirustpaste: could not start thumbnail worker: {err}");
         }
         Self {
             dir,
@@ -164,7 +164,7 @@ fn worker(jobs: Receiver<Command>, results: Sender<JobResult>, dir: PathBuf) {
                 .unwrap_or(false);
                 if !ok {
                     eprintln!(
-                        "rustclip: thumbnail generation failed for {:016x}",
+                        "antirustpaste: thumbnail generation failed for {:016x}",
                         job.hash
                     );
                 }
@@ -190,7 +190,7 @@ fn generate_from_blob(blob_path: &Path, hash: u64, dir: &Path) -> bool {
     let Ok(bytes) = fs::read(blob_path) else {
         return false;
     };
-    let Ok(thumb) = rustclip_imaging::thumbnail_png(&bytes, MAX_EDGE) else {
+    let Ok(thumb) = antirustpaste_imaging::thumbnail_png(&bytes, MAX_EDGE) else {
         return false;
     };
     write_atomic(dir, &dir.join(file_name(hash)), &thumb.png)
@@ -298,7 +298,8 @@ mod tests {
 
     impl TempDir {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!("rustclip-thumbs-{}", Uuid::new_v4()));
+            let path =
+                std::env::temp_dir().join(format!("antirustpaste-thumbs-{}", Uuid::new_v4()));
             let _ = fs::create_dir_all(&path);
             Self(path)
         }

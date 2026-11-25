@@ -1,6 +1,6 @@
 # Development
 
-> Last reviewed: 2026-11-25 · Version 0.1.1
+> Last reviewed: 2026-11-25 · Version 0.2.0
 
 ## Prerequisites
 
@@ -13,9 +13,9 @@
 ## Commands
 
 ```sh
-cargo build -p rustclip           # debug macOS app
-cargo build -p rustclip-imaging   # pure-Rust imaging crate
-cargo run -p rustclip             # runs the menu-bar app (blocks until quit)
+cargo build -p antirustpaste           # debug macOS app
+cargo build -p antirustpaste-imaging   # pure-Rust imaging crate
+cargo run -p antirustpaste             # runs the menu-bar app (blocks until quit)
 cargo test --workspace            # core + imaging + macOS shell tests
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
@@ -26,16 +26,16 @@ cargo fmt --all -- --check
 
 The workspace has four packages:
 
-- `apps/rustclip-macos` (binary `rustclip`) — AppKit shell;
-- `crates/rustclip-core` — platform-neutral model/storage/settings/filtering/
+- `apps/antirustpaste-macos` (binary `antirustpaste`) — AppKit shell;
+- `crates/antirustpaste-core` — platform-neutral model/storage/settings/filtering/
   thumbnail worker;
-- `crates/rustclip-imaging` — pure codec with `#![forbid(unsafe_code)]`;
-- `crates/rustclip-pdf` — pure image-to-PDF writer.
+- `crates/antirustpaste-imaging` — pure codec with `#![forbid(unsafe_code)]`;
+- `crates/antirustpaste-pdf` — pure image-to-PDF writer.
 
 Core must stay free of UI toolkits and native clipboard APIs. See
 [platforms.md](platforms.md) before adding Windows or Linux.
 
-`cargo run -p rustclip` starts a GUI app and does not return. For unattended work use
+`cargo run -p antirustpaste` starts a GUI app and does not return. For unattended work use
 `./scripts/smoke.sh` or run the binary in the background and stop only the PID
 you started.
 
@@ -46,33 +46,33 @@ paths:
 
 ```sh
 SCRATCH="$(mktemp -d)"
-RUSTCLIP_DATA_DIR="$SCRATCH/data" \
-RUSTCLIP_DEFAULTS_SUITE="com.rustclip.dev.$$" \
-RUSTCLIP_LAUNCH_AGENT_DIR="$SCRATCH/LaunchAgents" \
-RUSTCLIP_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
-RUSTCLIP_OPEN_IMAGES=1 RUSTCLIP_OPEN_PANEL=1 \
-./target/debug/rustclip
+ANTIRUSTPASTE_DATA_DIR="$SCRATCH/data" \
+ANTIRUSTPASTE_DEFAULTS_SUITE="com.antirustpaste.dev.$$" \
+ANTIRUSTPASTE_LAUNCH_AGENT_DIR="$SCRATCH/LaunchAgents" \
+ANTIRUSTPASTE_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
+ANTIRUSTPASTE_OPEN_IMAGES=1 ANTIRUSTPASTE_OPEN_PANEL=1 \
+./target/debug/antirustpaste
 ```
 
-`./scripts/smoke.sh` does this for you. `RUSTCLIP_SMOKE_PREFS=1` opens
-Preferences; `RUSTCLIP_SMOKE_PANEL=1` opens the history popup. The script kills
+`./scripts/smoke.sh` does this for you. `ANTIRUSTPASTE_SMOKE_PREFS=1` opens
+Preferences; `ANTIRUSTPASTE_SMOKE_PANEL=1` opens the history popup. The script kills
 only its own process and removes its scratch directory on success.
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `RUSTCLIP_DATA_DIR` | History directory | `~/Library/Application Support/RustClip` |
-| `RUSTCLIP_DEFAULTS_SUITE` | `NSUserDefaults` suite | bundle/process domain |
-| `RUSTCLIP_LAUNCH_AGENT_DIR` | Login-item plist directory | `~/Library/LaunchAgents` |
-| `RUSTCLIP_THUMB_CACHE_DIR` | Absolute, dedicated thumbnail cache | `/tmp/AntiRustPaste-<user>-<hash>/thumbnails` (boot-cleared on macOS) |
-| `RUSTCLIP_OPEN_PREFS=1` | Open Preferences at launch | off |
-| `RUSTCLIP_OPEN_PANEL=1` | Open the popup at launch | off |
-| `RUSTCLIP_OPEN_IMAGES=1` | Start the popup on Images | off |
+| `ANTIRUSTPASTE_DATA_DIR` | History directory | `~/Library/Application Support/AntiRustPaste` |
+| `ANTIRUSTPASTE_DEFAULTS_SUITE` | `NSUserDefaults` suite | bundle/process domain |
+| `ANTIRUSTPASTE_LAUNCH_AGENT_DIR` | Login-item plist directory | `~/Library/LaunchAgents` |
+| `ANTIRUSTPASTE_THUMB_CACHE_DIR` | Absolute, dedicated thumbnail cache | `/tmp/AntiRustPaste-<user>-<hash>/thumbnails` (boot-cleared on macOS) |
+| `ANTIRUSTPASTE_OPEN_PREFS=1` | Open Preferences at launch | off |
+| `ANTIRUSTPASTE_OPEN_PANEL=1` | Open the popup at launch | off |
+| `ANTIRUSTPASTE_OPEN_IMAGES=1` | Start the popup on Images | off |
 
 An override must be an absolute, dedicated directory. `/`, `/tmp`, the home
 directory and relative paths are ignored and the default is used instead.
 
-The `RUSTCLIP_OPEN_*` hooks exist for automation and documentation. They are
-inert unless set. `RUSTCLIP_SMOKE_IMAGES=1 ./scripts/smoke.sh` exercises the
+The `ANTIRUSTPASTE_OPEN_*` hooks exist for automation and documentation. They are
+inert unless set. `ANTIRUSTPASTE_SMOKE_IMAGES=1 ./scripts/smoke.sh` exercises the
 Images tab in the isolated launch.
 
 ## Permissions
@@ -90,21 +90,21 @@ Agents MUST NOT grant, revoke or script this permission. Ask the operator.
 
 ## Bundle and release
 
-The shipped dictionary, data directory and environment variables keep their
-original identifiers for compatibility: the bundle id is `com.rustclip.app`,
-history lives in `~/Library/Application Support/RustClip`, and the overrides are
-`RUSTCLIP_*`. Only the product and bundle name are AntiRustPaste, so existing
-histories, preferences and the Accessibility grant survive the rename.
+The bundle id stays `com.rustclip.app` so existing preferences, the LaunchAgent
+label and the Accessibility grant survive the rename. Everything else uses the
+product name: crates, the binary, the environment variables and the history
+directory (`~/Library/Application Support/AntiRustPaste`, migrated once from the
+old `RustClip` directory at launch).
 
 `./make-app.sh`:
 
 1. builds `--release` (LTO, size optimisation);
-2. creates `dist/AntiRustPaste.app/Contents/MacOS/rustclip`;
+2. creates `dist/AntiRustPaste.app/Contents/MacOS/antirustpaste`;
 3. copies `packaging/Info.plist` and sets `CFBundleShortVersionString` from
    `Cargo.toml`;
 4. ad-hoc signs the bundle (`codesign --force --sign -`).
 
-Set `RUSTCLIP_UNIVERSAL=1` to build both slices and `lipo` them into a universal
+Set `ANTIRUSTPASTE_UNIVERSAL=1` to build both slices and `lipo` them into a universal
 binary (`rustup target add aarch64-apple-darwin x86_64-apple-darwin` first).
 
 If `cargo` comes from Homebrew instead of rustup, the rustup-installed standard
@@ -127,12 +127,12 @@ launched again, which rewrites the plist.
 ## Debugging
 
 - Panics in callbacks are caught and logged to stderr as
-  `rustclip: recovered from a panic in <name>`. Run from a terminal to see them.
+  `antirustpaste: recovered from a panic in <name>`. Run from a terminal to see them.
 - A real crash log is in `~/Library/Logs/DiagnosticReports/`. Read the last
-  frames and map them to `apps/rustclip-macos/src/app.rs`, `views.rs`,
+  frames and map them to `apps/antirustpaste-macos/src/app.rs`, `views.rs`,
   `hotkey.rs` or `paste.rs`.
 - Set `RUST_BACKTRACE=1` when running a debug build to see the Rust side.
-- `log stream --process rustclip` shows system messages; AntiRustPaste only writes to
+- `log stream --process antirustpaste` shows system messages; AntiRustPaste only writes to
   stderr.
 - To check the event path without Accessibility, test that the clipboard content
   changes and the target app is activated; the synthetic key is the last step.
@@ -146,7 +146,7 @@ launched again, which rewrites the plist.
   first.
 - Every new OS callback goes through `guard`/`guard_value`.
 - AppKit, `AppState`, timers and pasteboard work stay on the main thread. The
-  only worker is `rustclip-thumbnails`, which may touch files and the imaging
+  only worker is `antirustpaste-thumbnails`, which may touch files and the imaging
   crate but never AppKit or `AppState`.
 - Errors that the user cannot act on are logged; errors they can act on use an
   alert.
@@ -166,9 +166,9 @@ launched again, which rewrites the plist.
 | Pasting only copies | Accessibility not granted for this build; grant it manually in System Settings. |
 | Images tab shows `IMG` permanently | The blob is missing/corrupt, the image exceeds 32 MP, or the worker could not write the cache; the clip is still pasteable. |
 | Images tab takes a moment to fill | Thumbnails are generated by the background worker and installed by the 0.1 s timer. |
-| Thumbnail cache survives a reboot | Check `RUSTCLIP_THUMB_CACHE_DIR`; an override can point outside `/tmp`. |
-| Old data appears in a test | `RUSTCLIP_DATA_DIR` was not set or points at the real directory. Stop and fix the test; do not delete the operator's history. |
-| Login item test polluted the machine | This should never happen: `RUSTCLIP_LAUNCH_AGENT_DIR` must be set. Remove only the test plist if you created one, and tell the operator. |
+| Thumbnail cache survives a reboot | Check `ANTIRUSTPASTE_THUMB_CACHE_DIR`; an override can point outside `/tmp`. |
+| Old data appears in a test | `ANTIRUSTPASTE_DATA_DIR` was not set or points at the real directory. Stop and fix the test; do not delete the operator's history. |
+| Login item test polluted the machine | This should never happen: `ANTIRUSTPASTE_LAUNCH_AGENT_DIR` must be set. Remove only the test plist if you created one, and tell the operator. |
 | Preferences window disappears | It is kept alive in `AppState::prefs`; check that the delegate/window is not dropped. |
 | App quits when the last window closes | `applicationShouldTerminateAfterLastWindowClosed` must return `false`. |
 

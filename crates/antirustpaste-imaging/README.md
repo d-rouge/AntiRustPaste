@@ -1,4 +1,4 @@
-# rustclip-imaging
+# antirustpaste-imaging
 
 Pure-Rust image metadata and thumbnail generation for [AntiRustPaste](../../README.md).
 
@@ -17,6 +17,6 @@ Dependency: `image` 0.25 with only `png`, `tiff` and `jpeg` features (MIT OR
 Apache-2.0; see [`THIRD_PARTY.md`](../../THIRD_PARTY.md)).
 
 ```rust
-let info = rustclip_imaging::info(&bytes)?;
-let thumb = rustclip_imaging::thumbnail_png(&bytes, 128)?;
+let info = antirustpaste_imaging::info(&bytes)?;
+let thumb = antirustpaste_imaging::thumbnail_png(&bytes, 128)?;
 ```

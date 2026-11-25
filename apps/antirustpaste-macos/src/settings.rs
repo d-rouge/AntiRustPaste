@@ -3,11 +3,11 @@
 use std::fs;
 use std::path::PathBuf;
 
+use antirustpaste_core::{IgnoredApp, Modifiers, Settings};
 use objc2::AnyThread;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2_foundation::{NSString, NSUserDefaults};
-use rustclip_core::{IgnoredApp, Modifiers, Settings};
 
 const K_MAX: &str = "maxClips";
 const K_RECORD: &str = "recordClips";
@@ -20,7 +20,7 @@ const K_DISPLAY: &str = "hotkeyDisplay";
 const K_HOTKEY_ENABLED: &str = "hotkeyEnabled";
 
 // Legacy NSEventModifierFlags stored by earlier builds. New values use
-// `rustclip_core::Modifiers` bits (shift/control/option/command = 1/2/4/8).
+// `antirustpaste_core::Modifiers` bits (shift/control/option/command = 1/2/4/8).
 const NS_SHIFT: u32 = 1 << 17;
 const NS_CONTROL: u32 = 1 << 18;
 const NS_OPTION: u32 = 1 << 19;
@@ -34,7 +34,7 @@ pub fn load() -> Settings {
     if defaults.objectForKey(&max_key).is_some() {
         let value = defaults.integerForKey(&max_key);
         if value > 0 {
-            settings.max_clips = (value as usize).min(rustclip_core::MAX_LIMIT);
+            settings.max_clips = (value as usize).min(antirustpaste_core::MAX_LIMIT);
         }
     }
 
@@ -122,7 +122,7 @@ fn migrate_modifiers(raw: u32) -> Modifiers {
 }
 
 fn defaults() -> Retained<NSUserDefaults> {
-    if let Ok(suite) = std::env::var("RUSTCLIP_DEFAULTS_SUITE")
+    if let Ok(suite) = std::env::var("ANTIRUSTPASTE_DEFAULTS_SUITE")
         && !suite.is_empty()
     {
         let name = NSString::from_str(&suite);
@@ -144,11 +144,11 @@ fn bool_default(defaults: &NSUserDefaults, key: &str, fallback: bool) -> bool {
     }
 }
 
-/// `RUSTCLIP_LAUNCH_AGENT_DIR` redirects the login item to a scratch
+/// `ANTIRUSTPASTE_LAUNCH_AGENT_DIR` redirects the login item to a scratch
 /// directory. Agents and tests MUST set it: changing the real LaunchAgents
 /// folder affects the operator's next login.
 fn launch_agent_path() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("RUSTCLIP_LAUNCH_AGENT_DIR")
+    if let Some(dir) = std::env::var_os("ANTIRUSTPASTE_LAUNCH_AGENT_DIR")
         && !dir.is_empty()
     {
         return Some(PathBuf::from(dir).join("com.rustclip.app.plist"));

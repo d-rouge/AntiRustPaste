@@ -8,7 +8,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSArray, NSData, NSString, NSURL};
 
-use rustclip_core::{Captured, Clip, ClipKind, Store, file_preview, human_size, make_preview};
+use antirustpaste_core::{Captured, Clip, ClipKind, Store, file_preview, human_size, make_preview};
 
 const MAX_ITEM_BYTES: usize = 50 * 1024 * 1024;
 
@@ -108,7 +108,7 @@ pub fn read_items(pb: &NSPasteboard) -> Vec<Captured> {
                             continue;
                         }
                         let preview = format!("Image · {}", human_size(bytes.len()));
-                        let info = rustclip_imaging::info(&bytes).ok();
+                        let info = antirustpaste_imaging::info(&bytes).ok();
                         chosen = Some(Captured {
                             kind: ClipKind::Image,
                             preview,

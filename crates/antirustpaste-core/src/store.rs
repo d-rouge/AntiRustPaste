@@ -100,22 +100,18 @@ pub struct Store {
 impl Store {
     /// Open the history at the user's data directory.
     ///
-    /// `RUSTCLIP_DATA_DIR` overrides the location. Agents and tests MUST point
+    /// `ANTIRUSTPASTE_DATA_DIR` overrides the location. Agents and tests MUST point
     /// it at a scratch directory so they never read or delete real clippings.
     pub fn open() -> Self {
-        let dir = std::env::var_os("RUSTCLIP_DATA_DIR")
+        let dir = std::env::var_os("ANTIRUSTPASTE_DATA_DIR")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                dirs::data_dir()
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join("RustClip")
-            });
+            .unwrap_or_else(default_dir);
         Self::open_at(dir)
     }
 
     /// Open a history in an explicit directory. Used by tests and the
-    /// `RUSTCLIP_DATA_DIR` override.
+    /// `ANTIRUSTPASTE_DATA_DIR` override.
     pub fn open_at(dir: PathBuf) -> Self {
         let _ = fs::create_dir_all(dir.join("blobs"));
         let mut store = Self {
@@ -151,7 +147,7 @@ impl Store {
         if let Ok(meta) = fs::metadata(&path)
             && meta.len() > MAX_INDEX_BYTES
         {
-            eprintln!("rustclip: history index is too large; moving it aside");
+            eprintln!("antirustpaste: history index is too large; moving it aside");
             let _ = fs::rename(&path, path.with_extension("json.bak"));
             return;
         }
@@ -172,7 +168,7 @@ impl Store {
                 self.clips = clips;
             }
             Err(err) => {
-                eprintln!("rustclip: could not read history ({err}); starting fresh");
+                eprintln!("antirustpaste: could not read history ({err}); starting fresh");
                 let _ = fs::rename(&path, path.with_extension("json.bak"));
             }
         }
@@ -184,10 +180,10 @@ impl Store {
         match serde_json::to_vec(&self.clips) {
             Ok(bytes) => {
                 if let Err(err) = fs::write(&tmp, bytes).and_then(|_| fs::rename(&tmp, &path)) {
-                    eprintln!("rustclip: could not save history: {err}");
+                    eprintln!("antirustpaste: could not save history: {err}");
                 }
             }
-            Err(err) => eprintln!("rustclip: could not encode history: {err}"),
+            Err(err) => eprintln!("antirustpaste: could not encode history: {err}"),
         }
     }
 
@@ -197,7 +193,7 @@ impl Store {
         match fs::write(&path, bytes) {
             Ok(()) => Some(name),
             Err(err) => {
-                eprintln!("rustclip: could not write blob: {err}");
+                eprintln!("antirustpaste: could not write blob: {err}");
                 None
             }
         }
@@ -429,6 +425,23 @@ pub fn file_preview(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
+/// The application data directory, with a one-time rename from the directory
+/// used before the product rename. Nothing is lost if the rename fails: the new
+/// directory is simply created empty and the old history stays where it was.
+fn default_dir() -> PathBuf {
+    let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
+    let dir = base.join("AntiRustPaste");
+    migrate_legacy_dir(&dir, &base.join("RustClip"));
+    dir
+}
+
+fn migrate_legacy_dir(new: &Path, old: &Path) {
+    if new.exists() || !old.exists() {
+        return;
+    }
+    let _ = fs::rename(old, new);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,7 +450,7 @@ mod tests {
 
     impl TempDir {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!("rustclip-test-{}", Uuid::new_v4()));
+            let path = std::env::temp_dir().join(format!("antirustpaste-test-{}", Uuid::new_v4()));
             let _ = fs::create_dir_all(&path);
             Self(path)
         }
@@ -672,5 +685,22 @@ mod tests {
 
         let reopened = Store::open_at(store.dir().to_path_buf());
         assert!(reopened.clips.is_empty());
+    }
+    #[test]
+    fn legacy_history_directory_is_migrated_only_once() {
+        let root = TempDir::new();
+        let old = root.0.join("RustClip");
+        let new = root.0.join("AntiRustPaste");
+        fs::create_dir_all(old.join("blobs")).expect("old dir");
+        fs::write(old.join("history.json"), "[]").expect("old index");
+
+        migrate_legacy_dir(&new, &old);
+        assert!(new.join("history.json").is_file());
+        assert!(!old.exists());
+
+        fs::create_dir_all(&old).expect("old dir again");
+        migrate_legacy_dir(&new, &old);
+        assert!(old.exists(), "an existing new directory wins");
+        assert!(new.join("history.json").is_file());
     }
 }

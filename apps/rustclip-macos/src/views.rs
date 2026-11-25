@@ -320,8 +320,8 @@ fn draw_list(view: &ClipListView) {
             );
 
             let pin_rect = NSRect::new(
-                NSPoint::new(width - 30.0, y + 19.0),
-                NSSize::new(14.0, 16.0),
+                NSPoint::new(width - 32.0, y + 18.0),
+                NSSize::new(16.0, 18.0),
             );
             let pin_image = if is_selected {
                 if pinned {
@@ -335,7 +335,11 @@ fn draw_list(view: &ClipListView) {
                 s.pin_outline.as_ref()
             };
             if let Some(image) = pin_image {
-                draw_image_fit(pin_rect, image);
+                if pinned {
+                    draw_image_fit_rotated(pin_rect, image, -45.0);
+                } else {
+                    draw_image_fit(pin_rect, image);
+                }
             } else {
                 let pin_color = if is_selected {
                     white.colorWithAlphaComponent(if pinned { 1.0 } else { 0.65 })
@@ -375,6 +379,40 @@ fn draw_list(view: &ClipListView) {
             }
         }
     });
+}
+
+fn draw_image_fit_rotated(rect: NSRect, image: &NSImage, degrees: f64) {
+    let size = image.size();
+    if size.width <= 0.0 || size.height <= 0.0 || rect.size.width <= 0.0 || rect.size.height <= 0.0
+    {
+        return;
+    }
+    let Some(context) = NSGraphicsContext::currentContext() else {
+        return;
+    };
+    let scale = (rect.size.width / size.width).min(rect.size.height / size.height);
+    let width = size.width * scale;
+    let height = size.height * scale;
+    let fitted = NSRect::new(
+        NSPoint::new(
+            rect.origin.x + (rect.size.width - width) / 2.0,
+            rect.origin.y + (rect.size.height - height) / 2.0,
+        ),
+        NSSize::new(width, height),
+    );
+    let center = NSPoint::new(
+        fitted.origin.x + fitted.size.width / 2.0,
+        fitted.origin.y + fitted.size.height / 2.0,
+    );
+    let transform = NSAffineTransform::new();
+    transform.translateXBy_yBy(center.x, center.y);
+    transform.rotateByDegrees(degrees);
+    transform.translateXBy_yBy(-center.x, -center.y);
+
+    context.saveGraphicsState();
+    transform.concat();
+    image.drawInRect(fitted);
+    context.restoreGraphicsState();
 }
 
 fn draw_pin(rect: NSRect, filled: bool, color: &NSColor) {

@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "antirustpaste"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "antirustpaste-core",
  "antirustpaste-imaging",

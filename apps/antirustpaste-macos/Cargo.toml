@@ -1,6 +1,6 @@
 [package]
 name = "antirustpaste"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2024"
 rust-version = "1.88"
 description = "A pure-Rust clipboard history manager for macOS, inspired by CopyClip"

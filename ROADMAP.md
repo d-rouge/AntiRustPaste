@@ -1,6 +1,6 @@
 # Roadmap
 
-> Last reviewed: 2026-11-25 · Current release: 0.3.1
+> Last reviewed: 2026-11-26 · Current release: 0.3.2
 
 This file records planned features. The implemented behaviour is in
 [docs/behavior.md](docs/behavior.md); platform status is in

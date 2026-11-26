@@ -1,0 +1,19 @@
+[package]
+name = "antirustpaste-linux"
+version = "0.4.0"
+edition = "2024"
+rust-version = "1.88"
+description = "A pure-Rust clipboard history manager for Linux (GTK4 + X11)"
+publish = false
+
+[target.'cfg(target_os = "linux")'.dependencies]
+antirustpaste-core = { path = "../../crates/antirustpaste-core" }
+antirustpaste-imaging = { path = "../../crates/antirustpaste-imaging" }
+antirustpaste-pdf = { path = "../../crates/antirustpaste-pdf" }
+dirs = "7.0.0"
+gtk4 = { version = "0.11.5", features = ["v4_10"] }
+ksni = { version = "0.3.7", features = ["blocking"] }
+libadwaita = { version = "0.9.2", features = ["v1_5"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+x11rb = { version = "0.14.0", features = ["xtest"] }

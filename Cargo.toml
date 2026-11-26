@@ -1,6 +1,9 @@
 [workspace]
 members = [
     "apps/antirustpaste-macos",
+    "apps/antirustpaste-linux",
+    "apps/antirustpaste-mcp",
+    "crates/antirustpaste-control",
     "crates/antirustpaste-core",
     "crates/antirustpaste-pdf",
     "crates/antirustpaste-imaging",

@@ -1,10 +1,15 @@
 # Platforms
 
-> Last reviewed: 2026-11-26 · Version 0.3.3
+> Last reviewed: 2026-11-26 · Version 0.4.0
 
-AntiRustPaste is structured so the domain works on any desktop OS, while each OS has
-its own native shell. **Only macOS is implemented today.** Windows and Linux
-have a defined place in the tree and a concrete list of work, but no code yet.
+AntiRustPaste is structured so the domain works on any desktop OS, while each OS
+has its own native shell. macOS is the primary, fully exercised implementation.
+The workspace also contains a Linux GTK4/X11 shell; it builds on Linux but was
+not run on the macOS host used to prepare this documentation. Windows has a
+defined place in the tree and a concrete list of work, but no code yet.
+
+Concrete porting checklists are in the [roadmap](../ROADMAP.md#planned-linux-port)
+for Linux and [Windows](../ROADMAP.md#planned-windows-port).
 
 ## Workspace layout
 
@@ -13,13 +18,17 @@ Cargo.toml                       workspace only
 apps/
   antirustpaste-macos/                implemented AppKit shell
     src/app.rs                   status item, state, actions, timers
+    src/app/control.rs           local MCP control socket
     src/views.rs                 NSPanel, history list, Preferences
     src/pasteboard.rs            NSPasteboard read/write
     src/paste.rs                 CoreGraphics ⌘V + Accessibility
     src/hotkey.rs                Carbon RegisterEventHotKey
     src/settings.rs              NSUserDefaults + LaunchAgent
     src/thumbnails.rs            boot-cleared cache path + NSImage loader
+  antirustpaste-mcp/                MCP stdio bridge
+  antirustpaste-linux/              GTK4 + X11 shell (Linux only)
 crates/
+  antirustpaste-control/             local JSON control protocol + client
   antirustpaste-core/                 platform-neutral domain
     src/store.rs                 Clip/Captured, JSON + blobs, dedup, trim
     src/settings.rs              Settings, IgnoredApp, Modifiers
@@ -30,8 +39,9 @@ crates/
   antirustpaste-pdf/                  pure-Rust image-to-PDF writer
 ```
 
-Future shells are added as `apps/antirustpaste-windows` and `apps/antirustpaste-linux`.
-They depend on core; core never depends on a shell.
+Future shells are added as `apps/antirustpaste-windows`. They depend on core;
+core never depends on a shell. The MCP bridge is optional and only the macOS
+shell currently binds a control socket.
 
 ## Boundaries
 
@@ -62,22 +72,28 @@ They depend on core; core never depends on a shell.
 
 | Capability | macOS | Windows | Linux |
 | --- | --- | --- | --- |
-| Tray / menu bar | ✅ `NSStatusItem` | ⬜ Win32 `Shell_NotifyIcon` | ⬜ StatusNotifierItem / AppIndicator |
-| Popup | ✅ AppKit `NSPanel` | ⬜ Win32 borderless window or chosen UI toolkit | ⬜ GTK4 / chosen UI toolkit |
-| Clipboard text/image/RTF/HTML/file | ✅ `NSPasteboard` | ⬜ Win32 clipboard formats | ⬜ Wayland data-control / portal, X11 |
-| Clipboard change signal | ✅ `changeCount` poll | ⬜ `AddClipboardFormatListener` | ⬜ portal / X11 owner-change |
-| Global hot key | ✅ Carbon | ⬜ `RegisterHotKey` | ⬜ X11 `XGrabKey`; Wayland portal |
-| Synthetic paste | ✅ CGEvent + Accessibility | ⬜ `SendInput` + UIAccess | ⬜ XTest; Wayland portal/ydotool |
-| Settings persistence | ✅ `NSUserDefaults` | ⬜ registry or JSON | ⬜ JSON (XDG config) |
-| Start at login | ✅ LaunchAgent | ⬜ Startup folder / Run key | ⬜ XDG autostart `.desktop` |
-| Thumbnail image loading | ✅ `NSImage` | ⬜ decoder → texture/bitmap | ⬜ decoder → texture/bitmap |
-| Thumbnail cache path | ✅ `/tmp/...` (boot-cleared) | ⬜ `%TEMP%\AntiRustPaste` | ⬜ `$XDG_CACHE_HOME`/tmp |
-| Image export to PDF | ✅ `antirustpaste-pdf` + `NSSavePanel` | ⬜ shell save dialog | ⬜ shell save dialog |
-| Quick Look preview | ✅ `QLPreviewPanel` | ⬜ shell preview | ⬜ shell preview |
-| Shell command history | ✅ zsh/bash on demand | ⬜ PowerShell/`ConsoleHost_history.txt` | ⬜ bash/zsh/fish paths |
-| Tests | ✅ 12 shell + 37 core + 12 imaging + 6 PDF | ⬜ | ⬜ |
+| Tray / menu bar | ✅ `NSStatusItem` | ⬜ Win32 `Shell_NotifyIcon` | ✅ `ksni` StatusNotifierItem |
+| Popup | ✅ AppKit `NSPanel` | ⬜ Win32 borderless window or chosen UI toolkit | ✅ GTK4 + libadwaita |
+| Clipboard text/image/RTF/HTML/file | ✅ `NSPasteboard` | ⬜ Win32 clipboard formats | ✅ GDK clipboard (X11; Wayland varies) |
+| Clipboard change signal | ✅ `changeCount` poll | ⬜ `AddClipboardFormatListener` | ✅ GDK clipboard change |
+| Global hot key | ✅ Carbon | ⬜ `RegisterHotKey` | ✅ X11 `XGrabKey` |
+| Synthetic paste | ✅ CGEvent + Accessibility | ⬜ `SendInput` + UIAccess | ✅ X11 XTest (X11 sessions) |
+| Settings persistence | ✅ `NSUserDefaults` | ⬜ registry or JSON | ✅ JSON (XDG config) |
+| Start at login | ✅ LaunchAgent | ⬜ Startup folder / Run key | ✅ XDG autostart `.desktop` |
+| Thumbnail image loading | ✅ `NSImage` | ⬜ decoder → texture/bitmap | ✅ `gdk::Texture` |
+| Thumbnail cache path | ✅ `/tmp/...` (boot-cleared) | ⬜ `%TEMP%\AntiRustPaste` | ✅ `$XDG_CACHE_HOME`/tmp |
+| Image export to PDF | ✅ `antirustpaste-pdf` + `NSSavePanel` | ⬜ shell save dialog | ✅ GTK file dialog |
+| Quick Look preview | ✅ `QLPreviewPanel` | ⬜ shell preview | ⬜ no native equivalent wired |
+| Edit clip text | ✅ in-app editor + TextEdit import | ⬜ shell editor | ⬜ not wired |
+| Shell command history | ✅ zsh/bash on demand | ⬜ PowerShell/`ConsoleHost_history.txt` | ✅ zsh/bash on demand |
+| Pause/resume from tray | ✅ status menu | ⬜ | ⬜ Preferences switch only |
+| Scoped clipping clears | ✅ all/text/images + unpinned variants | ⬜ | ⬜ section clear/all only |
+| Local MCP control | ✅ `antirustpaste-mcp` + Unix socket | ⬜ | ⬜ |
+| Tests | ✅ 29 shell + 55 core + 12 imaging + 6 PDF + 2 control + 2 MCP | ⬜ | ⬜ builds only; not run here |
 
-Legend: ✅ done, ⬜ not implemented.
+Legend: ✅ done, ⬜ not implemented or not wired. The Linux row describes the
+in-tree GTK4/X11 shell; it was not launched on the macOS host used for this
+documentation, so treat its runtime behaviour as unverified here.
 
 ## macOS (implemented)
 
@@ -85,20 +101,31 @@ Legend: ✅ done, ⬜ not implemented.
   `AntiRustPaste — clipboard history`).
 - Left-click toggles the popup; right-click opens the status menu.
 - Popup: search, Text/Images/Commands tabs, keyboard navigation, choose/copy,
-  optional paste, delete, clear and one-key choice with ⌘1…⌘9.
+  optional paste, delete, tab-scoped **Clear All** / **Clear Unpinned** and
+  one-key choice with ⌘1…⌘9.
+- Recording can be paused and resumed from the status menu; the item and the
+  Preferences checkbox share one saved flag.
 - Shell history: zsh and bash files are read on demand when the Commands tab is
   opened or refreshed; no background watcher.
 - Native pasteboard capture: text, RTF/RTFD, HTML, PNG/TIFF/JPEG images, file
   URLs. Concealed/transient items are skipped.
 - Preferences: max clips, recording, confirmations, optional paste after
-  choosing, login item, shortcut recorder, ignored apps, clear thumbnail cache.
+  choosing, login item, shortcut recorder, ignored apps, clear thumbnail cache,
+  and a **History** tab with scoped clipping deletes and disk usage.
 - Global shortcut through Carbon. Copying needs no permission; the optional
   paste uses CGEvent and Accessibility.
+- MCP control through a bundled `antirustpaste-mcp` bridge and a private local
+  Unix socket; no TCP port. The bridge can read and modify the same live state
+  as the menu-bar UI.
 - Thumbnail cache under `/tmp/AntiRustPaste-<user>-<hash>/thumbnails`, cleared by
   macOS at boot; one worker thread generates thumbnails.
 - Image export to PDF: a dedicated selection window, one A4 page per image,
   original blobs, Flate-compressed RGB, atomic destination write.
-- Quick Look preview of the selected image with Space (Images tab) or ⌘Y.
+- Quick Look preview of the selected row with Space (empty search, any tab) or
+  ⌘Y: text, rich text, HTML, image, command and file clips.
+- Edit text and command clips with **Edit Text…** (`⌘⇧E`); text previews can
+  also round-trip through Quick Look's **Open with TextEdit**, and saved changes
+  are imported on the next 1 s poll.
 
 Files: `apps/antirustpaste-macos/src/`.
 
@@ -153,39 +180,44 @@ Recommended first tasks, in order:
 Windows has the fewest platform caveats: tray click events, global hot keys and
 synthetic input are all supported without a portal.
 
-## Linux (not implemented)
+## Linux (implemented in-tree, unverified on this host)
 
-Start with **X11**, then add Wayland deliberately:
+The workspace contains `apps/antirustpaste-linux`, a GTK4 + libadwaita shell using
+`ksni` for the StatusNotifierItem tray and `x11rb` for X11 integration. It uses
+the shared core, imaging and PDF crates. It builds on Linux but was not launched
+on the macOS host used for this documentation, so treat the following as what
+the code intends, not as a verified runtime result:
 
-1. Tray: StatusNotifierItem/AppIndicator. **Click events are not reliable on
-   all desktops** (especially GNOME without an extension), so always provide a
-   menu item “Show History” and a global shortcut as fallbacks.
-2. Popup: GTK4/`libadwaita` or the chosen UI toolkit. Position under the tray
-   icon when coordinates are available; otherwise center on the active monitor.
-3. Clipboard:
-   - X11: selections + owner-change events.
-   - Wayland: `wlr-data-control`/portal where available; clipboard monitoring is
-     restricted by design on some compositors.
-4. Hot key:
-   - X11: `XGrabKey`.
-   - Wayland: XDG Desktop Portal `GlobalShortcuts`; not all compositors expose
-     it. Document the dependency.
-5. Paste:
-   - X11: XTest.
-   - Wayland: portal/`ydotool`; do not assume it works everywhere.
-6. Settings: JSON under `$XDG_CONFIG_HOME/antirustpaste/settings.json`.
-7. Login item: `$XDG_CONFIG_HOME/autostart/antirustpaste.desktop`.
-8. Thumbnail cache: `$XDG_CACHE_HOME/antirustpaste/thumbnails` or a boot-cleared
-   temporary directory; use one worker from core.
+- Tray: StatusNotifierItem menu with Show History, Preferences, Export Images to
+  PDF, Clear All Clippings and Quit. Click events are not reliable on every
+  desktop, so the menu remains the fallback.
+- Popup: GTK4/libadwaita with Text/Images/Commands tabs, search, pinned group,
+  row pin/delete controls and keyboard selection.
+- Clipboard: GDK read/write with concealed-MIME filtering and bounded image
+  bytes; change notification comes from the toolkit.
+- X11: `XGrabKey` for the global shortcut, `_NET_ACTIVE_WINDOW` for the source app
+  and XTest for synthetic Ctrl+V. A pure Wayland session degrades gracefully and
+  loses the hot key and synthetic paste.
+- Settings: JSON under `$XDG_CONFIG_HOME/antirustpaste/settings.json`; start at
+  login writes an XDG autostart `.desktop` file.
+- Thumbnails: `$XDG_CACHE_HOME/antirustpaste/thumbnails` or a temporary
+  directory; the core worker generates them.
+- Shell history: zsh/bash read on demand with `ANTIRUSTPASTE_SHELL_HISTORY_DIR`
+  isolation.
+- PDF export: GTK file dialog plus the shared `antirustpaste-pdf` writer.
 
-Linux is the hardest platform because of tray click delivery and Wayland input
-restrictions. Treat “works on my desktop” as insufficient; list the tested
-desktop/compositor in the PR/handoff.
+Not wired in the Linux shell yet: the local MCP control socket, the scoped
+clear/unpinned actions, a tray pause/resume item, Quick Look-style preview, and
+in-app text/title editing. Wayland clipboard monitoring and global shortcuts are
+limited by the compositor; document the tested desktop/compositor in any
+handoff.
 
 ## What core already gives a new shell
 
 - `Clip.pinned`, pinned-first ordering, `Store::set_pinned` and a trim that
   skips pinned clips.
+- `Clip.title`, `Store::set_title` and `make_title` for bounded, optional clip
+  names that search can match; each shell owns the rename UI and the row menu.
 - `Store::open`, `Store::open_at`, insert/dedup/trim/remove/clear, atomic JSON
   saves, corrupt-index quarantine, blob validation and missing-blob recovery.
 - Preview normalisation, relative time, human-readable sizes.
@@ -196,6 +228,10 @@ desktop/compositor in the PR/handoff.
   override.
 - `ThumbnailService` with one worker, pending-job de-duplication, generation
   epochs, prune and clear; `prune_now(dir, valid)` for startup.
+- `ClearScope`, `Store::count_scope` and `Store::clear_scope` for
+  all/text/images/unpinned text/unpinned images without ever matching commands.
+- `StorageUsage` and `Store::storage_usage` for bounded history-directory
+  accounting; the platform shell adds its cache size.
 - `antirustpaste_imaging::info` and `thumbnail_png` with 32 MP/512 px caps.
 
 ## What every shell still has to implement
@@ -209,6 +245,9 @@ desktop/compositor in the PR/handoff.
 - A cache directory policy and conversion of PNG bytes to the UI image type.
 - Keyboard handling, accessibility, screen/multi-display positioning, and
   click-away behaviour.
+- Optional: a private local control socket and MCP bridge. Only the macOS shell
+  currently implements this; a shell that adds it must reuse the core actions
+  and keep clipboard content out of logs.
 
 ## Adding a platform: checklist
 
@@ -234,14 +273,17 @@ desktop/compositor in the PR/handoff.
 | Variable | Scope | Meaning |
 | --- | --- | --- |
 | `ANTIRUSTPASTE_DATA_DIR` | core | history directory override |
+| `ANTIRUSTPASTE_CONTROL_SOCKET` | macOS shell | absolute local MCP control socket |
 | `ANTIRUSTPASTE_DEFAULTS_SUITE` | macOS shell | isolated `NSUserDefaults` suite |
 | `ANTIRUSTPASTE_LAUNCH_AGENT_DIR` | macOS shell | login-item plist directory |
-| `ANTIRUSTPASTE_THUMB_CACHE_DIR` | macOS shell | absolute, dedicated thumbnail cache |
-| `ANTIRUSTPASTE_SHELL_HISTORY_DIR` | macOS shell | directory holding `.zsh_history`/`.bash_history` |
-| `ANTIRUSTPASTE_OPEN_PREFS` | macOS shell | automation: open Preferences |
-| `ANTIRUSTPASTE_OPEN_PANEL` | macOS shell | automation: open popup |
-| `ANTIRUSTPASTE_OPEN_IMAGES` | macOS shell | automation: open popup on Images |
-| `ANTIRUSTPASTE_OPEN_COMMANDS` | macOS shell | automation: open popup on Commands |
+| `ANTIRUSTPASTE_THUMB_CACHE_DIR` | shells | absolute, dedicated thumbnail cache |
+| `ANTIRUSTPASTE_SHELL_HISTORY_DIR` | shells | directory holding `.zsh_history`/`.bash_history` |
+| `ANTIRUSTPASTE_CONFIG_DIR` | Linux shell | settings JSON directory |
+| `ANTIRUSTPASTE_AUTOSTART_DIR` | Linux shell | XDG autostart `.desktop` directory |
+| `ANTIRUSTPASTE_OPEN_PREFS` | shells | automation: open Preferences |
+| `ANTIRUSTPASTE_OPEN_PANEL` | shells | automation: open popup |
+| `ANTIRUSTPASTE_OPEN_IMAGES` | shells | automation: open popup on Images |
+| `ANTIRUSTPASTE_OPEN_COMMANDS` | shells | automation: open popup on Commands |
 
 Future shells should keep `ANTIRUSTPASTE_DATA_DIR` and add equivalents for their
 native settings/login-item locations. When `ANTIRUSTPASTE_DATA_DIR` is set

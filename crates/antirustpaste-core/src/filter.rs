@@ -59,6 +59,7 @@ mod tests {
             source_bundle: Some("com.apple.Safari".to_string()),
             date_ms: 0,
             hash: 1,
+            title: None,
             pinned: false,
         }
     }
@@ -96,5 +97,30 @@ mod tests {
         assert_eq!(filter_indices(&clips, Section::Text, "world"), vec![0]);
         assert_eq!(filter_indices(&clips, Section::Text, "safari"), vec![0]);
         assert!(filter_indices(&clips, Section::Text, "absent").is_empty());
+    }
+
+    #[test]
+    fn query_matches_a_user_title_case_insensitively() {
+        let mut named = clip(ClipKind::Image, "Image");
+        named.title = Some("Release checklist".to_string());
+        let clips = vec![named];
+
+        assert_eq!(
+            filter_indices(&clips, Section::Images, "release CHECK"),
+            vec![0]
+        );
+        assert_eq!(filter_indices(&clips, Section::Images, "image"), vec![0]);
+        assert!(filter_indices(&clips, Section::Images, "absent").is_empty());
+    }
+
+    #[test]
+    fn query_matches_title_and_content_after_rename() {
+        let mut named = clip(ClipKind::Text, "hello world");
+        named.title = Some("Greeting".to_string());
+        let clips = vec![named];
+
+        assert_eq!(filter_indices(&clips, Section::Text, "greeting"), vec![0]);
+        assert_eq!(filter_indices(&clips, Section::Text, "hello"), vec![0]);
+        assert_eq!(filter_indices(&clips, Section::Text, "world"), vec![0]);
     }
 }

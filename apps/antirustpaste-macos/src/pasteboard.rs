@@ -204,6 +204,18 @@ pub fn read_items(pb: &NSPasteboard) -> Vec<Captured> {
     out
 }
 
+/// Put only the plain-text representation of a rich clipping on the pasteboard.
+///
+/// The stored blob and UTI stay untouched; this only changes what the next
+/// paste sees. Returns `false` when the clip has no plain text to offer.
+pub fn write_clip_plain_text(pb: &NSPasteboard, clip: &Clip) -> bool {
+    let Some(text) = clip.plain_text() else {
+        return false;
+    };
+    pb.clearContents();
+    pb.setString_forType(&NSString::from_str(text), t_string())
+}
+
 /// Put a stored clipping back on the pasteboard.
 pub fn write_clip(pb: &NSPasteboard, store: &Store, clip: &Clip) -> bool {
     pb.clearContents();

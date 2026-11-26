@@ -1,0 +1,16 @@
+[package]
+name = "antirustpaste-mcp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "MCP bridge for the AntiRustPaste macOS app"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[[bin]]
+name = "antirustpaste-mcp"
+path = "src/main.rs"
+
+[dependencies]
+antirustpaste-control = { path = "../../crates/antirustpaste-control" }
+serde_json = "1.0.154"

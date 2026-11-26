@@ -8,6 +8,41 @@ use serde::{Deserialize, Serialize};
 pub const MAX_LIMIT: usize = 9999;
 pub const DEFAULT_LIMIT: usize = 200;
 
+/// A platform-neutral 8-bit sRGB colour. The macOS shell converts it to
+/// `NSColor`; other shells can use it directly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rgb {
+    pub red: u8,
+    pub green: u8,
+    pub blue: u8,
+}
+
+impl Rgb {
+    pub const fn new(red: u8, green: u8, blue: u8) -> Self {
+        Self { red, green, blue }
+    }
+
+    pub const fn to_u32(self) -> u32 {
+        ((self.red as u32) << 16) | ((self.green as u32) << 8) | self.blue as u32
+    }
+
+    pub const fn from_u32(value: u32) -> Self {
+        Self::new(
+            ((value >> 16) & 0xff) as u8,
+            ((value >> 8) & 0xff) as u8,
+            (value & 0xff) as u8,
+        )
+    }
+}
+
+/// Default pinned-row tint. The app renders it at low opacity, so this warm
+/// yellow becomes a soft paper-like card rather than a saturated block.
+pub const DEFAULT_PINNED_BACKGROUND: Rgb = Rgb::new(250, 230, 55);
+/// Default pinned marker colour: a deep violet, the complementary hue of the
+/// warm-yellow card. It is distinct from the blue selection and avoids the
+/// recording/error association of red.
+pub const DEFAULT_PINNED_INDICATOR: Rgb = Rgb::new(94, 53, 177);
+
 /// Platform-neutral modifier bits. The macOS shell maps these to NSEvent flags.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Modifiers(pub u32);
@@ -63,6 +98,8 @@ pub struct Settings {
     pub hotkey_modifiers: Modifiers,
     pub hotkey_display: String,
     pub hotkey_enabled: bool,
+    pub pinned_background: Rgb,
+    pub pinned_indicator: Rgb,
 }
 
 impl Default for Settings {
@@ -78,6 +115,8 @@ impl Default for Settings {
             hotkey_modifiers: Modifiers::COMMAND | Modifiers::SHIFT,
             hotkey_display: "⇧⌘V".to_string(),
             hotkey_enabled: true,
+            pinned_background: DEFAULT_PINNED_BACKGROUND,
+            pinned_indicator: DEFAULT_PINNED_INDICATOR,
         }
     }
 }
@@ -146,5 +185,24 @@ mod tests {
         assert_eq!(modifiers.bits(), 0b1001);
         assert!(modifiers.contains(Modifiers::SHIFT));
         assert!(!modifiers.contains(Modifiers::CONTROL));
+    }
+
+    #[test]
+    fn pinned_colours_have_defaults_and_round_trip() {
+        let settings = Settings::default();
+        assert_eq!(DEFAULT_PINNED_BACKGROUND, Rgb::new(250, 230, 55));
+        assert_eq!(DEFAULT_PINNED_INDICATOR, Rgb::new(94, 53, 177));
+        assert_eq!(settings.pinned_background, DEFAULT_PINNED_BACKGROUND);
+        assert_eq!(settings.pinned_indicator, DEFAULT_PINNED_INDICATOR);
+        assert_eq!(
+            Rgb::from_u32(settings.pinned_background.to_u32()),
+            settings.pinned_background
+        );
+    }
+
+    #[test]
+    fn rgb_packing_is_bounded_to_24_bits() {
+        assert_eq!(Rgb::from_u32(u32::MAX), Rgb::new(255, 255, 255));
+        assert_eq!(Rgb::new(1, 2, 3).to_u32(), 0x010203);
     }
 }

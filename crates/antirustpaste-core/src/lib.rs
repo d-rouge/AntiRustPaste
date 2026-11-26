@@ -11,12 +11,16 @@ pub mod store;
 pub mod thumbnails;
 
 pub use filter::{Section, filter_indices};
-pub use settings::{DEFAULT_LIMIT, IgnoredApp, MAX_LIMIT, Modifiers, Settings};
+pub use settings::{
+    DEFAULT_LIMIT, DEFAULT_PINNED_BACKGROUND, DEFAULT_PINNED_INDICATOR, IgnoredApp, MAX_LIMIT,
+    Modifiers, Rgb, Settings,
+};
 pub use shell_history::{
     Shell, ShellCommand, ShellCursors, ShellFile, ShellRead, load_cursors, now_ms, read_new,
     save_cursors,
 };
 pub use store::{
-    Captured, Clip, ClipKind, Store, file_preview, human_size, make_preview, relative_time,
+    Captured, ClearScope, Clip, ClipKind, EditTextError, MAX_EDIT_TEXT_BYTES, MAX_TITLE_CHARS,
+    StorageUsage, Store, file_preview, human_size, make_preview, make_title, relative_time,
 };
 pub use thumbnails::{JobResult, ThumbnailService};

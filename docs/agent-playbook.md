@@ -1,6 +1,6 @@
 # Agent playbook
 
-> Last reviewed: 2026-11-26 · Version 0.3.3
+> Last reviewed: 2026-11-26 · Version 0.4.0
 
 Practical recipes for working on AntiRustPaste. Read [`../AGENTS.md`](../AGENTS.md)
 first; this file explains *how*, not what the rules are.
@@ -17,7 +17,8 @@ git status --short 2>/dev/null || echo "not a git repository"
 - This tree may have uncommitted work or no Git at all. Never delete a file you
   have not read.
 - Read `docs/architecture.md` and the module you are changing. For a UI change,
-  also read `docs/behavior.md` and `docs/testing.md`.
+  also read `docs/behavior.md` and `docs/testing.md`. For control-socket or MCP
+  changes, read `docs/mcp.md` and keep the tool schemas in sync.
 
 ## Safe run and stop
 
@@ -36,6 +37,7 @@ For a longer interactive run, start the process yourself and keep its PID:
 ```sh
 SCRATCH="$(mktemp -d)"
 ANTIRUSTPASTE_DATA_DIR="$SCRATCH/data" \
+ANTIRUSTPASTE_CONTROL_SOCKET="$SCRATCH/control.sock" \
 ANTIRUSTPASTE_DEFAULTS_SUITE="com.antirustpaste.agent.$$" \
 ANTIRUSTPASTE_LAUNCH_AGENT_DIR="$SCRATCH/LaunchAgents" \
 ANTIRUSTPASTE_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
@@ -139,7 +141,8 @@ pasteboard result.
 2. Load with a safe default and clamp numeric values.
 3. Save from the action in `app.rs`; do not write defaults from `drawRect:`.
 4. Reflect the value in `open_preferences` when the window is (re)opened.
-5. Add the control to the General or Exceptions tab in `views.rs`.
+5. Add the control to the General, Appearance, Exceptions or History tab in
+   `views.rs`.
 6. Add a test for pure clamping/dedup logic where possible.
 7. Update `docs/behavior.md` and the preferences table in the README if it is
    user-visible.
@@ -202,20 +205,43 @@ An unknown or malformed stored value must fall back to the default, not panic.
 7. Add a smoke path with isolated data/settings/cache and document the tested
    OS/compositor.
 
+## Recipe: add or change an MCP tool
+
+1. Read [`mcp.md`](mcp.md) and `apps/antirustpaste-macos/src/app/control.rs`.
+2. Add the JSON schema and description in `apps/antirustpaste-mcp/src/main.rs`.
+   Keep the MCP layer thin: validate the envelope, forward the method and its
+   arguments, and render the app result.
+3. Add the method to `dispatch` in `app/control.rs`. Do not hold a `with_state`
+   borrow across AppKit; collect the request first, dispatch after the borrow,
+   then queue the response.
+4. Reuse an existing app action (`write_clip_to_pasteboard`, `perform_clear_scope`,
+   `set_recording`, `set_section`, `export_images_pdf`, …). If the UI and MCP
+   need slightly different confirmation behaviour, split the action instead of
+   duplicating the storage logic.
+5. Bound new inputs and outputs. Never return or log clipboard text unless the
+   tool explicitly asks for it.
+6. Add a unit test for a pure helper, a schema test, or both.
+7. Update [`mcp.md`](mcp.md), the tool list in `docs/testing.md` if covered, and
+   `docs/behavior.md` when the user-visible contract changes.
+8. Verify with a scratch app and socket; never point a test MCP call at the real
+   history.
+
 ## Recipe: package and verify
 
 ```sh
 ./scripts/check.sh
 ./make-app.sh
 ./scripts/smoke.sh          # debug binary
-ANTIRUSTPASTE_BIN=dist/AntiRustPaste.app/Contents/MacOS/antirustpaste ./scripts/smoke.sh
+ANTIRUSTPASTE_BIN=dist/AntiRustPaste.app/Contents/MacOS/AntiRustPaste ./scripts/smoke.sh
 ```
 
-`make-app.sh` ad-hoc signs the bundle. Verify:
+`make-app.sh` ad-hoc signs the MCP bridge and the bundle. Verify:
 
 ```sh
+codesign --verify --deep --strict dist/AntiRustPaste.app
 codesign -dv dist/AntiRustPaste.app
 plutil -p dist/AntiRustPaste.app/Contents/Info.plist
+ls -l dist/AntiRustPaste.app/Contents/MacOS
 ```
 
 Do not copy the bundle to `/Applications` or launch it at login unless the
@@ -280,6 +306,7 @@ Checks run:
 - ./scripts/check.sh       pass
 - ./scripts/smoke.sh       pass
 - ANTIRUSTPASTE_SMOKE_PREFS=1 ./scripts/smoke.sh   pass
+- MCP scratch check:       pass / not run
 - manual: (which rows, with what scratch paths)
 
 Not run:

@@ -14,6 +14,80 @@ use uuid::Uuid;
 const MAX_INDEX_BYTES: u64 = 64 * 1024 * 1024;
 pub(crate) const MAX_BLOB_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_PREVIEW_CHARS: usize = 200;
+/// Maximum stored length of a user-chosen clip title, in characters.
+pub const MAX_TITLE_CHARS: usize = 160;
+/// Maximum text length accepted by the in-app editor, in bytes. Larger clips
+/// stay readable and copyable but cannot be edited in the text view.
+pub const MAX_EDIT_TEXT_BYTES: usize = 1024 * 1024;
+
+/// Why `Store::set_text` refused an edit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditTextError {
+    /// The clip no longer exists or its kind has no editable text.
+    Unavailable,
+    /// The new text is empty or only whitespace.
+    Empty,
+    /// The new text exceeds `MAX_EDIT_TEXT_BYTES`.
+    TooLarge,
+    /// Another clip already stores the same text.
+    Duplicate,
+}
+
+/// Which history entries a clear action removes.
+///
+/// Terminal commands are never removed by these scopes: they come from the
+/// user's own shell history and have their own deletion path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClearScope {
+    /// Every clipping, including pinned rows.
+    Everything,
+    /// Every Text-section clipping (text, rich text, HTML and files).
+    Text,
+    /// Every image clipping.
+    Images,
+    /// Unpinned Text-section clippings only.
+    UnpinnedText,
+    /// Unpinned image clippings only.
+    UnpinnedImages,
+}
+
+impl ClearScope {
+    /// Whether this scope removes `clip`.
+    pub fn matches(self, clip: &Clip) -> bool {
+        if clip.kind == ClipKind::Command {
+            return false;
+        }
+        let image = clip.kind == ClipKind::Image;
+        match self {
+            Self::Everything => true,
+            Self::Text => !image,
+            Self::Images => image,
+            Self::UnpinnedText => !image && !clip.pinned,
+            Self::UnpinnedImages => image && !clip.pinned,
+        }
+    }
+}
+
+/// Disk footprint of one history directory.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StorageUsage {
+    /// The JSON index (`history.json`).
+    pub index_bytes: u64,
+    /// Regular files in `blobs/`.
+    pub blob_bytes: u64,
+    /// Other files directly in the history directory, such as the shell cursor
+    /// sidecar or a quarantined backup.
+    pub other_bytes: u64,
+}
+
+impl StorageUsage {
+    /// All history files together, saturating instead of overflowing.
+    pub fn history_total(self) -> u64 {
+        self.index_bytes
+            .saturating_add(self.blob_bytes)
+            .saturating_add(self.other_bytes)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -50,6 +124,10 @@ pub struct Clip {
     pub source_bundle: Option<String>,
     pub date_ms: i64,
     pub hash: u64,
+    /// Optional user-chosen name. It replaces the preview in the list and is
+    /// included in search, but never changes the clipboard content.
+    #[serde(default)]
+    pub title: Option<String>,
     /// Pinned clips stay above unpinned clips and are exempt from automatic
     /// trimming. They are removed only by an explicit delete/clear.
     #[serde(default)]
@@ -57,7 +135,20 @@ pub struct Clip {
 }
 
 impl Clip {
+    /// The title shown in the list: the user title when one is set, otherwise
+    /// the normal content summary.
     pub fn display_title(&self) -> &str {
+        if let Some(title) = &self.title
+            && !title.is_empty()
+        {
+            return title;
+        }
+        self.content_title()
+    }
+
+    /// The content summary without the user title. Used to show the underlying
+    /// clipping under a custom name.
+    pub fn content_title(&self) -> &str {
         if self.preview.is_empty() {
             match self.kind {
                 ClipKind::Text => "Text",
@@ -78,6 +169,20 @@ impl Clip {
         match &self.source_name {
             Some(app) if !app.is_empty() => format!("{app} · {when}"),
             _ => when,
+        }
+    }
+
+    /// The plain-text representation stored next to a rich clip.
+    ///
+    /// Returns `None` when the clip has no richer text form, so a "plain text"
+    /// action only appears when it would change the pasteboard content. The
+    /// stored blob and UTI are never modified.
+    pub fn plain_text(&self) -> Option<&str> {
+        match self.kind {
+            ClipKind::RichText | ClipKind::Html => {
+                self.text.as_deref().filter(|text| !text.is_empty())
+            }
+            _ => None,
         }
     }
 }
@@ -148,6 +253,16 @@ impl Store {
         Some(self.blob_path(name))
     }
 
+    /// Current disk footprint of the history directory. Directory reads are
+    /// bounded and never follow symlinks.
+    pub fn storage_usage(&self) -> StorageUsage {
+        StorageUsage {
+            index_bytes: regular_file_len(&self.index_path()),
+            blob_bytes: directory_file_bytes(&self.dir.join("blobs"), None),
+            other_bytes: directory_file_bytes(&self.dir, Some("history.json")),
+        }
+    }
+
     fn load(&mut self) {
         let path = self.index_path();
         if let Ok(meta) = fs::metadata(&path)
@@ -170,6 +285,7 @@ impl Store {
                 });
                 for clip in &mut clips {
                     truncate_preview(&mut clip.preview);
+                    clip.title = clip.title.as_deref().and_then(make_title);
                 }
                 self.clips = clips;
             }
@@ -217,17 +333,20 @@ impl Store {
         let is_command = captured.kind == ClipKind::Command;
 
         // Re-copying something that is already in the history moves it to the
-        // top instead of creating a duplicate. A pinned duplicate stays pinned.
-        let was_pinned = if let Some(pos) = self.clips.iter().position(|c| c.hash == hash) {
-            let old = self.clips.remove(pos);
-            let pinned = old.pinned;
-            if let Some(blob) = old.blob {
-                self.delete_blob(&blob);
-            }
-            pinned
-        } else {
-            false
-        };
+        // top instead of creating a duplicate. A pinned duplicate stays pinned
+        // and keeps its user-chosen title.
+        let (was_pinned, old_title) =
+            if let Some(pos) = self.clips.iter().position(|c| c.hash == hash) {
+                let old = self.clips.remove(pos);
+                let pinned = old.pinned;
+                let title = old.title;
+                if let Some(blob) = old.blob {
+                    self.delete_blob(&blob);
+                }
+                (pinned, title)
+            } else {
+                (false, None)
+            };
 
         let blob = captured.data.as_deref().and_then(|d| self.write_blob(d));
         let clip = Clip {
@@ -244,6 +363,7 @@ impl Store {
             source_bundle: captured.source_bundle,
             date_ms: chrono::Utc::now().timestamp_millis(),
             hash,
+            title: old_title,
             pinned: was_pinned,
         };
         let insert_at = if was_pinned {
@@ -354,6 +474,7 @@ impl Store {
             source_bundle: None,
             date_ms,
             hash,
+            title: None,
             pinned: false,
         };
         let insert_at = self.clips.iter().filter(|clip| clip.pinned).count();
@@ -381,6 +502,75 @@ impl Store {
         };
         self.clips.insert(insert_at, clip);
         Some(insert_at)
+    }
+
+    /// Replace the optional display title. An empty or whitespace-only string
+    /// clears it. Returns true when the stored title changed.
+    pub fn set_title(&mut self, index: usize, title: &str) -> bool {
+        let title = make_title(title);
+        let Some(clip) = self.clips.get_mut(index) else {
+            return false;
+        };
+        if clip.title == title {
+            return false;
+        }
+        clip.title = title;
+        true
+    }
+
+    /// Replace the text of a plain-text or command clip. The source metadata,
+    /// id, date, title and pin are preserved, while the preview, byte length and
+    /// hash are recomputed. Returns `Ok(false)` when the text is unchanged.
+    ///
+    /// Duplicates are refused instead of merged so an edit cannot silently
+    /// remove the metadata of another row.
+    pub fn set_text(&mut self, index: usize, text: &str) -> Result<bool, EditTextError> {
+        let Some(clip) = self.clips.get(index) else {
+            return Err(EditTextError::Unavailable);
+        };
+        if !matches!(clip.kind, ClipKind::Text | ClipKind::Command) {
+            return Err(EditTextError::Unavailable);
+        }
+        if text.trim().is_empty() {
+            return Err(EditTextError::Empty);
+        }
+        if text.len() > MAX_EDIT_TEXT_BYTES {
+            return Err(EditTextError::TooLarge);
+        }
+        if clip.text.as_deref() == Some(text) {
+            return Ok(false);
+        }
+
+        let captured = Captured {
+            kind: clip.kind,
+            preview: make_preview(text),
+            text: Some(text.to_string()),
+            data_type: None,
+            data: None,
+            byte_len: text.len(),
+            width: None,
+            height: None,
+            source_name: clip.source_name.clone(),
+            source_bundle: clip.source_bundle.clone(),
+        };
+        let hash = hash_captured(&captured);
+        if self
+            .clips
+            .iter()
+            .enumerate()
+            .any(|(other_index, other)| other_index != index && other.hash == hash)
+        {
+            return Err(EditTextError::Duplicate);
+        }
+
+        let Some(clip) = self.clips.get_mut(index) else {
+            return Err(EditTextError::Unavailable);
+        };
+        clip.text = captured.text;
+        clip.preview = captured.preview;
+        clip.byte_len = captured.byte_len;
+        clip.hash = hash;
+        Ok(true)
     }
 
     pub fn remove(&mut self, index: usize) -> bool {
@@ -422,6 +612,17 @@ impl Store {
         }
     }
 
+    /// Number of clippings that [`Self::clear_scope`] would remove.
+    pub fn count_scope(&self, scope: ClearScope) -> usize {
+        self.clips.iter().filter(|clip| scope.matches(clip)).count()
+    }
+
+    /// Remove every clipping matching `scope`, deleting its blob. Commands and
+    /// pinned rows outside the scope are kept. Returns the number removed.
+    pub fn clear_scope(&mut self, scope: ClearScope) -> usize {
+        self.remove_where(|clip| scope.matches(clip))
+    }
+
     pub fn read_blob(&self, name: &str) -> Option<Vec<u8>> {
         if !valid_blob_name(name) {
             return None;
@@ -443,6 +644,43 @@ fn valid_blob_name(name: &str) -> bool {
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+}
+
+/// Bound on directory entries inspected for the disk-usage line. A history is
+/// normally far below this; a hostile directory cannot stall the UI forever.
+const MAX_USAGE_ENTRIES: usize = 100_000;
+
+fn regular_file_len(path: &Path) -> u64 {
+    fs::symlink_metadata(path)
+        .ok()
+        .filter(|meta| meta.file_type().is_file())
+        .map(|meta| meta.len())
+        .unwrap_or(0)
+}
+
+/// Sum regular files directly in `dir`, skipping `skip` when it names a file.
+/// Symlinks and nested directories are not followed.
+fn directory_file_bytes(dir: &Path, skip: Option<&str>) -> u64 {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for (index, entry) in entries.flatten().enumerate() {
+        if index >= MAX_USAGE_ENTRIES {
+            break;
+        }
+        if let Some(skip) = skip
+            && entry.file_name().to_str() == Some(skip)
+        {
+            continue;
+        }
+        if let Ok(meta) = fs::symlink_metadata(entry.path())
+            && meta.file_type().is_file()
+        {
+            total = total.saturating_add(meta.len());
+        }
+    }
+    total
 }
 
 fn truncate_preview(preview: &mut String) {
@@ -486,6 +724,38 @@ pub fn human_size(bytes: usize) -> String {
         format!("{:.1} KB", bytes as f64 / 1024.0)
     } else {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+/// Normalise a user-chosen title: one line, collapsed whitespace, bounded
+/// length. An empty result clears the title.
+pub fn make_title(text: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut last_space = false;
+    for ch in text.chars() {
+        let ch = if ch.is_whitespace() || ch.is_control() {
+            ' '
+        } else {
+            ch
+        };
+        if ch == ' ' {
+            if last_space || out.is_empty() {
+                continue;
+            }
+            last_space = true;
+        } else {
+            last_space = false;
+        }
+        out.push(ch);
+        if out.chars().count() >= MAX_TITLE_CHARS {
+            break;
+        }
+    }
+    let trimmed = out.trim_end();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
 
@@ -595,12 +865,71 @@ mod tests {
         }
     }
 
+    fn rich_clip(kind: ClipKind, text: Option<&str>) -> Clip {
+        Clip {
+            id: "rich".to_string(),
+            kind,
+            preview: "Rich Text".to_string(),
+            text: text.map(str::to_string),
+            data_type: Some("public.rtf".to_string()),
+            blob: None,
+            byte_len: 0,
+            width: None,
+            height: None,
+            source_name: None,
+            source_bundle: None,
+            date_ms: 0,
+            hash: 0,
+            title: None,
+            pinned: false,
+        }
+    }
+
+    #[test]
+    fn plain_text_is_only_exposed_for_rich_clips() {
+        let rich = rich_clip(ClipKind::RichText, Some("plain words"));
+        assert_eq!(rich.plain_text(), Some("plain words"));
+
+        let html = rich_clip(ClipKind::Html, Some("html words"));
+        assert_eq!(html.plain_text(), Some("html words"));
+
+        let empty = rich_clip(ClipKind::RichText, Some(""));
+        assert_eq!(empty.plain_text(), None);
+
+        let missing = rich_clip(ClipKind::Html, None);
+        assert_eq!(missing.plain_text(), None);
+
+        for kind in [
+            ClipKind::Text,
+            ClipKind::Command,
+            ClipKind::File,
+            ClipKind::Image,
+        ] {
+            assert_eq!(rich_clip(kind, Some("plain words")).plain_text(), None);
+        }
+    }
+
     #[test]
     fn preview_collapses_whitespace_and_bounds_length() {
         assert_eq!(make_preview("  hello \n\t world  "), "hello world");
         assert_eq!(make_preview(" \n\t "), "Text");
         let long = "x".repeat(500);
         assert_eq!(make_preview(&long).chars().count(), 160);
+    }
+
+    #[test]
+    fn title_normalisation_collapses_whitespace_and_bounds_length() {
+        assert_eq!(
+            make_title("  release \n\t checklist  ").as_deref(),
+            Some("release checklist")
+        );
+        assert_eq!(make_title(" \n\t "), None);
+        assert_eq!(make_title("a\0b"), Some("a b".to_string()));
+        let long = "x".repeat(500);
+        assert_eq!(
+            make_title(&long).map(|title| title.chars().count()),
+            Some(MAX_TITLE_CHARS)
+        );
     }
 
     #[test]
@@ -648,6 +977,112 @@ mod tests {
         assert!(store.clips[0].pinned);
         assert_eq!(store.clips[0].text.as_deref(), Some("first"));
         assert!(!store.clips[1].pinned);
+    }
+
+    #[test]
+    fn a_title_survives_recopying_and_can_be_cleared() {
+        let temp = TempDir::new();
+        let mut store = temp.store();
+
+        store.insert(text_clip("original"), 10);
+        assert!(store.set_title(0, "  My   note "));
+        assert_eq!(store.clips[0].title.as_deref(), Some("My note"));
+        assert_eq!(store.clips[0].display_title(), "My note");
+        assert_eq!(store.clips[0].content_title(), "original");
+
+        store.insert(text_clip("another"), 10);
+        store.insert(text_clip("original"), 10);
+        assert_eq!(store.clips.len(), 2);
+        assert_eq!(store.clips[0].title.as_deref(), Some("My note"));
+
+        assert!(store.set_title(0, " \n "));
+        assert_eq!(store.clips[0].title, None);
+        assert_eq!(store.clips[0].display_title(), "original");
+        assert!(!store.set_title(0, ""));
+        assert!(!store.set_title(99, "ignored"));
+    }
+
+    #[test]
+    fn editing_text_updates_preview_hash_and_keeps_metadata() {
+        let temp = TempDir::new();
+        let mut store = temp.store();
+
+        store.insert(text_clip("old text"), 10);
+        store.set_title(0, "note");
+        store.set_pinned(0, true).expect("pin the clip");
+        let original_id = store.clips[0].id.clone();
+        let original_date = store.clips[0].date_ms;
+
+        assert_eq!(store.set_text(0, "first line\nsecond line"), Ok(true));
+        let clip = &store.clips[0];
+        assert_eq!(clip.text.as_deref(), Some("first line\nsecond line"));
+        assert_eq!(clip.preview, make_preview("first line\nsecond line"));
+        assert_eq!(clip.byte_len, "first line\nsecond line".len());
+        assert_eq!(
+            clip.hash,
+            hash_captured(&text_clip("first line\nsecond line"))
+        );
+        assert_eq!(clip.id, original_id);
+        assert_eq!(clip.date_ms, original_date);
+        assert_eq!(clip.title.as_deref(), Some("note"));
+        assert!(clip.pinned);
+        assert_eq!(store.set_text(0, "first line\nsecond line"), Ok(false));
+
+        store.save();
+        let reopened = temp.store();
+        assert_eq!(
+            reopened.clips[0].text.as_deref(),
+            Some("first line\nsecond line")
+        );
+        assert_eq!(
+            reopened.clips[0].hash,
+            hash_captured(&text_clip("first line\nsecond line"))
+        );
+    }
+
+    #[test]
+    fn editing_text_rejects_invalid_input_and_duplicates() {
+        let temp = TempDir::new();
+        let mut store = temp.store();
+
+        store.insert(text_clip("alpha"), 10);
+        store.insert(text_clip("beta"), 10);
+
+        assert_eq!(store.set_text(0, " \n\t "), Err(EditTextError::Empty));
+        assert_eq!(
+            store.set_text(0, &"x".repeat(MAX_EDIT_TEXT_BYTES + 1)),
+            Err(EditTextError::TooLarge)
+        );
+        assert_eq!(store.set_text(0, "alpha"), Err(EditTextError::Duplicate));
+        assert_eq!(store.set_text(99, "gamma"), Err(EditTextError::Unavailable));
+
+        store.insert(image_clip(b"not an image"), 10);
+        let image_index = store
+            .clips
+            .iter()
+            .position(|clip| clip.kind == ClipKind::Image)
+            .expect("image clip");
+        assert_eq!(
+            store.set_text(image_index, "gamma"),
+            Err(EditTextError::Unavailable)
+        );
+    }
+
+    #[test]
+    fn editing_a_command_keeps_its_shell() {
+        let temp = TempDir::new();
+        let mut store = temp.store();
+
+        store.upsert_command("echo old", "zsh", 1_700_000_000_000, 10, true);
+        let index = store
+            .clips
+            .iter()
+            .position(|clip| clip.kind == ClipKind::Command)
+            .expect("command clip");
+
+        assert_eq!(store.set_text(index, "echo new"), Ok(true));
+        assert_eq!(store.clips[index].text.as_deref(), Some("echo new"));
+        assert_eq!(store.clips[index].source_name.as_deref(), Some("zsh"));
     }
 
     #[test]
@@ -856,6 +1291,139 @@ mod tests {
         }
     }
 
+    fn scoped_store() -> (TempDir, Store) {
+        let temp = TempDir::new();
+        let mut store = temp.store();
+        store.insert(text_clip("text"), 10);
+        store.insert(image_clip(b"image"), 10);
+        store.insert(text_clip("pinned text"), 10);
+        store.set_pinned(0, true).expect("pin text");
+        store.insert(image_clip(b"pinned image"), 10);
+        store.set_pinned(1, true).expect("pin image");
+        store.upsert_command("echo hi", "zsh", 1_700_000_000_000, 10, true);
+        (temp, store)
+    }
+
+    fn has_text(store: &Store, text: &str) -> bool {
+        store
+            .clips
+            .iter()
+            .any(|clip| clip.text.as_deref() == Some(text))
+    }
+
+    #[test]
+    fn clear_text_scope_removes_text_and_keeps_images_and_commands() {
+        let (_temp, mut store) = scoped_store();
+
+        assert_eq!(store.count_scope(ClearScope::Text), 2);
+        assert_eq!(store.clear_scope(ClearScope::Text), 2);
+
+        assert!(!has_text(&store, "text"));
+        assert!(!has_text(&store, "pinned text"));
+        assert!(
+            store
+                .clips
+                .iter()
+                .filter(|clip| clip.kind == ClipKind::Image)
+                .count()
+                == 2
+        );
+        assert!(
+            store
+                .clips
+                .iter()
+                .any(|clip| clip.kind == ClipKind::Command)
+        );
+    }
+
+    #[test]
+    fn clear_images_scope_removes_images_and_their_blobs() {
+        let (_temp, mut store) = scoped_store();
+        let blobs: Vec<PathBuf> = store
+            .clips
+            .iter()
+            .filter(|clip| clip.kind == ClipKind::Image)
+            .filter_map(|clip| clip.blob.as_deref())
+            .map(|name| store.blob_path(name))
+            .collect();
+        assert_eq!(blobs.len(), 2);
+
+        assert_eq!(store.count_scope(ClearScope::Images), 2);
+        assert_eq!(store.clear_scope(ClearScope::Images), 2);
+
+        assert!(store.clips.iter().all(|clip| clip.kind != ClipKind::Image));
+        for blob in blobs {
+            assert!(!blob.exists(), "blob should be deleted: {}", blob.display());
+        }
+        assert!(has_text(&store, "text"));
+        assert!(has_text(&store, "pinned text"));
+    }
+
+    #[test]
+    fn unpinned_scopes_keep_pinned_clips_and_commands() {
+        let (_temp, mut store) = scoped_store();
+
+        assert_eq!(store.clear_scope(ClearScope::UnpinnedText), 1);
+        assert!(!has_text(&store, "text"));
+        assert!(has_text(&store, "pinned text"));
+        assert_eq!(store.count_scope(ClearScope::UnpinnedImages), 1);
+        assert_eq!(store.clear_scope(ClearScope::UnpinnedImages), 1);
+        assert!(
+            store
+                .clips
+                .iter()
+                .filter(|clip| clip.kind == ClipKind::Image)
+                .count()
+                == 1
+        );
+        assert!(
+            store
+                .clips
+                .iter()
+                .filter(|clip| clip.kind == ClipKind::Image)
+                .all(|clip| clip.pinned)
+        );
+        assert!(
+            store
+                .clips
+                .iter()
+                .any(|clip| clip.kind == ClipKind::Command)
+        );
+    }
+
+    #[test]
+    fn clear_everything_keeps_commands() {
+        let (_temp, mut store) = scoped_store();
+
+        assert_eq!(store.count_scope(ClearScope::Everything), 4);
+        assert_eq!(store.clear_scope(ClearScope::Everything), 4);
+
+        assert_eq!(store.clips.len(), 1);
+        assert_eq!(store.clips[0].kind, ClipKind::Command);
+    }
+
+    #[test]
+    fn storage_usage_counts_index_blobs_and_sidecars() {
+        let temp = TempDir::new();
+        let mut store = temp.store();
+        store.insert(image_clip(b"12345"), 10);
+        store.save();
+        fs::write(store.dir().join("shell-history.json"), b"abcd").expect("write sidecar");
+
+        let usage = store.storage_usage();
+        assert!(usage.index_bytes > 0);
+        assert_eq!(usage.blob_bytes, 5);
+        assert_eq!(usage.other_bytes, 4);
+        assert_eq!(
+            usage.history_total(),
+            usage.index_bytes + usage.blob_bytes + usage.other_bytes
+        );
+
+        store.clear_scope(ClearScope::Everything);
+        store.save();
+        assert_eq!(store.storage_usage().blob_bytes, 0);
+    }
+
     #[test]
     fn a_corrupt_index_is_quarantined_instead_of_crashing() {
         let temp = TempDir::new();
@@ -896,7 +1464,43 @@ mod tests {
         let clip = &store.clips[0];
         assert_eq!(clip.width, None);
         assert_eq!(clip.height, None);
+        assert_eq!(clip.title, None);
         assert_eq!(clip.text.as_deref(), Some("legacy clipping"));
+    }
+
+    #[test]
+    fn an_oversized_title_is_normalised_on_load() {
+        let temp = TempDir::new();
+        let dir = temp.0.join("store");
+        let _ = fs::create_dir_all(dir.join("blobs"));
+        let long_title = "x".repeat(500);
+        let json = format!(
+            r#"[{{
+                "id": "titled",
+                "kind": "text",
+                "preview": "body",
+                "text": "body",
+                "data_type": null,
+                "blob": null,
+                "byte_len": 4,
+                "source_name": null,
+                "source_bundle": null,
+                "date_ms": 1700000000000,
+                "hash": 2,
+                "title": "{long_title}"
+            }}]"#
+        );
+        fs::write(dir.join("history.json"), json).expect("write titled index");
+
+        let store = Store::open_at(dir);
+        let Some(clip) = store.clips.first() else {
+            panic!("record should load");
+        };
+        assert_eq!(
+            clip.title.as_deref().map(|title| title.chars().count()),
+            Some(MAX_TITLE_CHARS)
+        );
+        assert_eq!(clip.display_title().chars().count(), MAX_TITLE_CHARS);
     }
 
     #[test]

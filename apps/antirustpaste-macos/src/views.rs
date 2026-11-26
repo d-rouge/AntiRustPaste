@@ -1,15 +1,17 @@
 //! AppKit views: the popup history list, the ignored-apps list, the popup
 //! panel itself and the preferences window.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+use objc2::{
+    AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel,
+};
 use objc2_app_kit::*;
 use objc2_foundation::*;
 
-use antirustpaste_core::{Clip, ClipKind, human_size};
+use antirustpaste_core::{Clip, ClipKind, Rgb, human_size};
 
 use crate::app::{
     self, AppState, ClipboardSection, LIST_BOTTOM, LIST_HEADER_H, ListLayout, PANEL_H, PANEL_W,
@@ -40,6 +42,24 @@ fn draw_text(text: &str, rect: NSRect, font: &NSFont, color: &NSColor, align: NS
     let attrs: Retained<NSDictionary<NSAttributedStringKey, AnyObject>> =
         NSDictionary::from_slices(&keys, &objects);
     unsafe { string.drawInRect_withAttributes(rect, Some(&attrs)) };
+}
+
+fn text_width(text: &str, font: &NSFont) -> f64 {
+    let string = NSString::from_str(text);
+    let keys: [&NSAttributedStringKey; 1] = unsafe { [NSFontAttributeName] };
+    let objects: [&AnyObject; 1] = [as_any(font)];
+    let attrs: Retained<NSDictionary<NSAttributedStringKey, AnyObject>> =
+        NSDictionary::from_slices(&keys, &objects);
+    unsafe { string.sizeWithAttributes(Some(&attrs)).width }
+}
+
+fn text_height(text: &str, font: &NSFont) -> f64 {
+    let string = NSString::from_str(text);
+    let keys: [&NSAttributedStringKey; 1] = unsafe { [NSFontAttributeName] };
+    let objects: [&AnyObject; 1] = [as_any(font)];
+    let attrs: Retained<NSDictionary<NSAttributedStringKey, AnyObject>> =
+        NSDictionary::from_slices(&keys, &objects);
+    unsafe { string.sizeWithAttributes(Some(&attrs)).height }
 }
 
 fn fill_rounded(rect: NSRect, radius: f64, color: &NSColor) {
@@ -120,11 +140,18 @@ impl PanelDelegate {
 // History list
 // ---------------------------------------------------------------------------
 
+const NO_HOVER_ROW: usize = usize::MAX;
+
+pub(crate) struct ClipListIvars {
+    hover_row: Cell<usize>,
+    hover_clip: RefCell<Option<String>>,
+}
+
 define_class!(
     #[unsafe(super(NSView))]
     #[thread_kind = MainThreadOnly]
     #[name = "RCClipListView"]
-    #[ivars = ()]
+    #[ivars = ClipListIvars]
     pub(crate) struct ClipListView;
 
     unsafe impl NSObjectProtocol for ClipListView {}
@@ -140,10 +167,60 @@ define_class!(
             true
         }
 
+        #[unsafe(method(updateTrackingAreas))]
+        fn update_tracking_areas(&self) {
+            guard("clip_list_update_tracking_areas", || {
+                let areas = self.trackingAreas();
+                for area in areas.iter() {
+                    self.removeTrackingArea(&area);
+                }
+                let options = NSTrackingAreaOptions::MouseEnteredAndExited
+                    | NSTrackingAreaOptions::MouseMoved
+                    | NSTrackingAreaOptions::ActiveInKeyWindow
+                    | NSTrackingAreaOptions::InVisibleRect;
+                let area = unsafe {
+                    NSTrackingArea::initWithRect_options_owner_userInfo(
+                        NSTrackingArea::alloc(),
+                        self.bounds(),
+                        options,
+                        Some(as_any(self)),
+                        None,
+                    )
+                };
+                self.addTrackingArea(&area);
+            });
+        }
+
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
             guard("draw_rect", || {
                 draw_list(self);
+            });
+        }
+
+        #[unsafe(method(mouseEntered:))]
+        fn mouse_entered(&self, event: &NSEvent) {
+            guard("clip_list_mouse_entered", || {
+                self.update_hover_from_event(event);
+            });
+        }
+
+        #[unsafe(method(mouseMoved:))]
+        fn mouse_moved(&self, event: &NSEvent) {
+            guard("clip_list_mouse_moved", || {
+                self.update_hover_from_event(event);
+            });
+        }
+
+        #[unsafe(method(mouseExited:))]
+        fn mouse_exited(&self, _event: &NSEvent) {
+            guard("clip_list_mouse_exited", || {
+                let was_hovered = self.ivars().hover_row.replace(NO_HOVER_ROW) != NO_HOVER_ROW;
+                let had_clip = self.ivars().hover_clip.borrow_mut().take().is_some();
+                if was_hovered || had_clip {
+                    self.setNeedsDisplay(true);
+                    app::hover_preview_changed(None);
+                }
             });
         }
 
@@ -154,10 +231,19 @@ define_class!(
             });
         }
 
+        #[unsafe(method(rightMouseDown:))]
+        fn right_mouse_down(&self, event: &NSEvent) {
+            guard("right_mouse_down", || {
+                app::handle_list_right_click(self, event);
+            });
+        }
+
         #[unsafe(method(scrollWheel:))]
         fn scroll_wheel(&self, event: &NSEvent) {
             guard("scroll_wheel", || {
                 app::handle_list_scroll(event.scrollingDeltaY());
+                let point = self.convertPoint_fromView(event.locationInWindow(), None);
+                self.update_hover_at(point);
             });
         }
 
@@ -174,21 +260,82 @@ define_class!(
 
 impl ClipListView {
     pub(crate) fn create(mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(());
+        let this = Self::alloc(mtm).set_ivars(ClipListIvars {
+            hover_row: Cell::new(NO_HOVER_ROW),
+            hover_clip: RefCell::new(None),
+        });
         let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1.0, 1.0));
         unsafe { msg_send![super(this), initWithFrame: frame] }
     }
+
+    pub(crate) fn hover_row(&self) -> usize {
+        self.ivars().hover_row.get()
+    }
+
+    fn update_hover_from_event(&self, event: &NSEvent) {
+        let point = self.convertPoint_fromView(event.locationInWindow(), None);
+        self.update_hover_at(point);
+    }
+
+    fn update_hover_at(&self, point: NSPoint) {
+        let (row, clip_id) = with_state(|s| {
+            let indices = filtered_indices(s);
+            let layout = list_layout(s, &indices);
+            let row = layout.row_at(point.y + s.scroll).unwrap_or(NO_HOVER_ROW);
+            let clip_id = if row == NO_HOVER_ROW {
+                None
+            } else {
+                indices
+                    .get(row)
+                    .and_then(|index| s.store.clips.get(*index))
+                    .map(|clip| clip.id.clone())
+            };
+            (row, clip_id)
+        });
+        let row_changed = self.ivars().hover_row.replace(row) != row;
+        let clip_changed = {
+            let mut hover_clip = self.ivars().hover_clip.borrow_mut();
+            if *hover_clip == clip_id {
+                false
+            } else {
+                *hover_clip = clip_id.clone();
+                true
+            }
+        };
+        if row_changed || clip_changed {
+            self.setNeedsDisplay(true);
+        }
+        // Ask every time: if the callout was hidden by deactivating the app, the
+        // same row must be able to show it again on the next mouse move.
+        app::hover_preview_changed(clip_id);
+    }
 }
 
-fn dot_color(kind: ClipKind) -> Retained<NSColor> {
-    match kind {
-        ClipKind::Text => NSColor::systemBlueColor(),
-        ClipKind::RichText => NSColor::systemPurpleColor(),
-        ClipKind::Html => NSColor::systemIndigoColor(),
-        ClipKind::Image => NSColor::systemGreenColor(),
-        ClipKind::File => NSColor::systemOrangeColor(),
-        ClipKind::Command => NSColor::systemTealColor(),
-        ClipKind::Other => NSColor::systemGrayColor(),
+pub(crate) fn color_from_rgb(rgb: Rgb) -> Retained<NSColor> {
+    NSColor::colorWithSRGBRed_green_blue_alpha(
+        f64::from(rgb.red) / 255.0,
+        f64::from(rgb.green) / 255.0,
+        f64::from(rgb.blue) / 255.0,
+        1.0,
+    )
+}
+
+pub(crate) fn rgb_from_color(color: &NSColor) -> Rgb {
+    let Some(converted) = color.colorUsingColorSpace(&NSColorSpace::sRGBColorSpace()) else {
+        return Rgb::new(0, 0, 0);
+    };
+    Rgb::new(
+        component_to_u8(converted.redComponent()),
+        component_to_u8(converted.greenComponent()),
+        component_to_u8(converted.blueComponent()),
+    )
+}
+
+fn component_to_u8(value: f64) -> u8 {
+    if value.is_finite() {
+        (value.clamp(0.0, 1.0) * 255.0).round() as u8
+    } else {
+        0
     }
 }
 
@@ -206,10 +353,32 @@ fn draw_list_contents(view: &ClipListView) {
     let bounds = view.bounds();
     let width = bounds.size.width;
     let height = bounds.size.height;
+    let hover_row = view.hover_row();
 
-    let (indices, selected, scroll, query, section, layout) = with_state(|s: &mut AppState| {
+    let (
+        indices,
+        selected,
+        scroll,
+        query,
+        section,
+        layout,
+        pinned_background_rgb,
+        pinned_indicator_rgb,
+        start,
+        end,
+        visible_bundles,
+    ) = with_state(|s: &mut AppState| {
         let indices = filtered_indices(s);
         let layout = list_layout(s, &indices);
+        let (start, end) = layout.visible_range(s.scroll, s.scroll + height);
+        let visible_bundles = (start..end)
+            .map(|visible| {
+                indices
+                    .get(visible)
+                    .and_then(|index| s.store.clips.get(*index))
+                    .and_then(|clip| clip.source_bundle.clone())
+            })
+            .collect::<Vec<_>>();
         (
             indices,
             s.selected,
@@ -217,8 +386,19 @@ fn draw_list_contents(view: &ClipListView) {
             s.query.clone(),
             s.section,
             layout,
+            s.settings.pinned_background,
+            s.settings.pinned_indicator,
+            start,
+            end,
+            visible_bundles,
         )
     });
+    let pinned_background = color_from_rgb(pinned_background_rgb);
+    let pinned_indicator = color_from_rgb(pinned_indicator_rgb);
+    let row_icons = visible_bundles
+        .iter()
+        .map(|bundle| app::app_icon_for_bundle(bundle.as_deref()))
+        .collect::<Vec<_>>();
 
     if indices.is_empty() {
         let message = if query.is_empty() {
@@ -242,38 +422,67 @@ fn draw_list_contents(view: &ClipListView) {
     }
 
     let title_font = NSFont::systemFontOfSize(13.0);
-    let subtitle_font = NSFont::systemFontOfSize(11.0);
+    let subtitle_font = NSFont::systemFontOfSize(11.5);
+    let subtitle_line_h = text_height("Xg", &subtitle_font).max(14.0);
     let label_color = NSColor::labelColor();
     let secondary = NSColor::secondaryLabelColor();
     let white = NSColor::whiteColor();
     let selected_bg = NSColor::selectedContentBackgroundColor();
+    let hover_bg = selected_bg.colorWithAlphaComponent(0.12);
     let separator = NSColor::separatorColor().colorWithAlphaComponent(0.55);
     let placeholder = NSColor::separatorColor().colorWithAlphaComponent(0.35);
 
-    let (start, end) = layout.visible_range(scroll, scroll + height);
-
     with_state(|s: &mut AppState| {
-        draw_list_grouping(width, height, scroll, &layout, &secondary);
+        let title_symbol = s.title_symbol.clone();
+        let title_symbol_selected = s.title_symbol_selected.clone();
+        let badge_font = NSFont::systemFontOfSize(10.0);
+        let badge_text = "Edited";
+        let badge_text_width = text_width(badge_text, &badge_font);
+        let badge_text_height = text_height("Xg", &badge_font).max(12.0);
+        let badge_height = 16.0;
+        let badge_padding = 7.0;
+        let badge_pencil = 10.0;
+        let badge_inner_gap = 4.0;
+        let badge_width = badge_padding * 2.0 + badge_pencil + badge_inner_gap + badge_text_width;
+        let badge_spacing = 6.0;
+        let badge_fill = label_color.colorWithAlphaComponent(0.12);
+        let badge_fill_emphasis = NSColor::blackColor().colorWithAlphaComponent(0.55);
+        let badge_content = label_color.colorWithAlphaComponent(0.72);
+        let badge_content_emphasis = white.colorWithAlphaComponent(0.95);
+        draw_list_grouping(
+            width,
+            height,
+            scroll,
+            &layout,
+            &secondary,
+            &pinned_background,
+        );
 
         for visible in start..end {
             let Some(&clip_index) = indices.get(visible) else {
                 continue;
             };
-            let (kind, hash, blob, title, subtitle, pinned) = {
+            let (hash, blob, custom_title, content, subtitle, pinned) = {
                 let Some(clip) = s.store.clips.get(clip_index) else {
                     continue;
                 };
                 (
-                    clip.kind,
                     clip.hash,
                     clip.blob.clone(),
-                    image_title(clip),
+                    clip.title.clone().filter(|title| !title.is_empty()),
+                    content_summary(clip),
                     clip.subtitle(),
                     clip.pinned,
                 )
             };
+            let has_title = custom_title.is_some();
+            let title = match custom_title {
+                Some(title) => title,
+                None => content,
+            };
             let y = layout.row_top(visible) - scroll;
             let is_selected = visible == selected;
+            let is_hovered = visible == hover_row;
             let in_pinned_group = visible < layout.pinned();
 
             if is_selected {
@@ -285,12 +494,21 @@ fn draw_list_contents(view: &ClipListView) {
                     6.0,
                     &selected_bg,
                 );
+            } else if is_hovered {
+                fill_rounded(
+                    NSRect::new(
+                        NSPoint::new(6.0, y + 3.0),
+                        NSSize::new(width - 12.0, ROW_H - 6.0),
+                    ),
+                    6.0,
+                    &hover_bg,
+                );
             }
 
             let text_left = if section == ClipboardSection::Images {
                 62.0
             } else {
-                36.0
+                16.0
             };
 
             if section == ClipboardSection::Images {
@@ -311,20 +529,20 @@ fn draw_list_contents(view: &ClipListView) {
                         );
                     }
                 }
-            } else {
-                let dot = NSRect::new(NSPoint::new(18.0, y + 22.0), NSSize::new(8.0, 8.0));
-                let path = NSBezierPath::bezierPathWithOvalInRect(dot);
-                if is_selected {
-                    white.setFill();
-                } else {
-                    dot_color(kind).setFill();
-                }
-                path.fill();
             }
 
+            let title_available = (width
+                - text_left
+                - 44.0
+                - if has_title {
+                    badge_width + badge_spacing
+                } else {
+                    0.0
+                })
+            .max(0.0);
             let title_rect = NSRect::new(
                 NSPoint::new(text_left, y + 10.0),
-                NSSize::new(width - text_left - 44.0, 18.0),
+                NSSize::new(title_available, 18.0),
             );
             let title_color = if is_selected { &white } else { &label_color };
             draw_text(
@@ -334,45 +552,90 @@ fn draw_list_contents(view: &ClipListView) {
                 title_color,
                 NSTextAlignment::Left,
             );
-
-            let pin_rect = NSRect::new(
-                NSPoint::new(width - 32.0, y + 18.0),
-                NSSize::new(16.0, 18.0),
-            );
-            let pin_image = if is_selected {
-                if pinned {
-                    s.pin_filled_selected.as_ref()
+            if has_title {
+                let measured = text_width(&title, &title_font).min(title_available);
+                let badge_x = text_left + measured + badge_spacing;
+                let badge_y = y + 19.0 - badge_height / 2.0;
+                let badge_rect = NSRect::new(
+                    NSPoint::new(badge_x, badge_y),
+                    NSSize::new(badge_width, badge_height),
+                );
+                let badge_emphasis = pinned || is_selected;
+                let badge_symbol = if badge_emphasis {
+                    title_symbol_selected.as_ref()
                 } else {
-                    s.pin_outline_selected.as_ref()
-                }
-            } else if pinned {
-                s.pin_filled.as_ref()
-            } else {
-                s.pin_outline.as_ref()
-            };
-            if let Some(image) = pin_image {
-                if pinned {
-                    draw_image_fit_rotated(pin_rect, image, -45.0);
-                } else {
-                    draw_image_fit(pin_rect, image);
-                }
-            } else {
-                let pin_color = if is_selected {
-                    white.colorWithAlphaComponent(if pinned { 1.0 } else { 0.65 })
-                } else if pinned {
-                    NSColor::controlAccentColor()
-                } else {
-                    secondary.colorWithAlphaComponent(0.72)
+                    title_symbol.as_ref()
                 };
-                draw_pin(pin_rect, pinned, &pin_color);
+                fill_rounded(
+                    badge_rect,
+                    badge_height / 2.0,
+                    if badge_emphasis {
+                        &badge_fill_emphasis
+                    } else {
+                        &badge_fill
+                    },
+                );
+                let content_color = if badge_emphasis {
+                    &badge_content_emphasis
+                } else {
+                    &badge_content
+                };
+                let mut content_x = badge_x + badge_padding;
+                if let Some(symbol) = badge_symbol {
+                    let pencil_y = badge_y + (badge_height - badge_pencil) / 2.0;
+                    let pencil_rect = NSRect::new(
+                        NSPoint::new(content_x, pencil_y),
+                        NSSize::new(badge_pencil, badge_pencil),
+                    );
+                    draw_image_fit(pencil_rect, symbol);
+                    content_x += badge_pencil + badge_inner_gap;
+                }
+                let badge_text_y = y + 19.0 - badge_text_height / 2.0;
+                draw_text(
+                    badge_text,
+                    NSRect::new(
+                        NSPoint::new(content_x, badge_text_y),
+                        NSSize::new(badge_text_width, badge_text_height),
+                    ),
+                    &badge_font,
+                    content_color,
+                    NSTextAlignment::Left,
+                );
             }
 
+            let marker_rect = NSRect::new(
+                NSPoint::new(width - 30.0, y + 21.0),
+                NSSize::new(12.0, 12.0),
+            );
+            let marker_color = if is_selected {
+                white.colorWithAlphaComponent(if pinned { 1.0 } else { 0.65 })
+            } else if pinned {
+                pinned_indicator.clone()
+            } else {
+                secondary.colorWithAlphaComponent(0.65)
+            };
+            draw_pin_marker(marker_rect, pinned, &marker_color);
+
+            let row_icon = row_icons
+                .get(visible.saturating_sub(start))
+                .and_then(|icon| icon.as_ref());
+            let subtitle_left = if row_icon.is_some() {
+                text_left + 16.0
+            } else {
+                text_left
+            };
+            if let Some(icon) = row_icon {
+                let icon_rect =
+                    NSRect::new(NSPoint::new(text_left, y + 31.0), NSSize::new(13.0, 13.0));
+                draw_image_fit_alpha(icon_rect, icon, 0.8);
+            }
+            let subtitle_y = y + 37.5 - subtitle_line_h / 2.0;
             let subtitle_rect = NSRect::new(
-                NSPoint::new(text_left, y + 30.0),
-                NSSize::new(width - text_left - 44.0, 15.0),
+                NSPoint::new(subtitle_left, subtitle_y),
+                NSSize::new(width - subtitle_left - 44.0, subtitle_line_h),
             );
             let subtitle_color = if is_selected {
-                white.colorWithAlphaComponent(0.85)
+                white.colorWithAlphaComponent(0.8)
             } else {
                 secondary.clone()
             };
@@ -403,6 +666,7 @@ fn draw_list_grouping(
     scroll: f64,
     layout: &ListLayout,
     secondary: &NSColor,
+    pinned_background: &NSColor,
 ) {
     if let Some((top, card_height)) = layout.pinned_card() {
         let card = NSRect::new(
@@ -413,6 +677,8 @@ fn draw_list_grouping(
         NSColor::controlBackgroundColor()
             .colorWithAlphaComponent(0.45)
             .setFill();
+        path.fill();
+        pinned_background.colorWithAlphaComponent(0.18).setFill();
         path.fill();
         NSColor::separatorColor()
             .colorWithAlphaComponent(0.45)
@@ -443,65 +709,38 @@ fn draw_group_header(text: &str, y: f64, width: f64, height: f64, font: &NSFont,
     );
 }
 
-fn draw_image_fit_rotated(rect: NSRect, image: &NSImage, degrees: f64) {
-    let size = image.size();
-    if size.width <= 0.0 || size.height <= 0.0 || rect.size.width <= 0.0 || rect.size.height <= 0.0
-    {
-        return;
-    }
-    let Some(context) = NSGraphicsContext::currentContext() else {
-        return;
-    };
-    let scale = (rect.size.width / size.width).min(rect.size.height / size.height);
-    let width = size.width * scale;
-    let height = size.height * scale;
-    let fitted = NSRect::new(
-        NSPoint::new(
-            rect.origin.x + (rect.size.width - width) / 2.0,
-            rect.origin.y + (rect.size.height - height) / 2.0,
-        ),
-        NSSize::new(width, height),
-    );
-    let center = NSPoint::new(
-        fitted.origin.x + fitted.size.width / 2.0,
-        fitted.origin.y + fitted.size.height / 2.0,
-    );
-    let transform = NSAffineTransform::new();
-    transform.translateXBy_yBy(center.x, center.y);
-    transform.rotateByDegrees(degrees);
-    transform.translateXBy_yBy(-center.x, -center.y);
-
-    context.saveGraphicsState();
-    transform.concat();
-    image.drawInRect(fitted);
-    context.restoreGraphicsState();
-}
-
-fn draw_pin(rect: NSRect, filled: bool, color: &NSColor) {
-    let head = NSBezierPath::bezierPathWithOvalInRect(NSRect::new(
-        NSPoint::new(rect.origin.x + 2.0, rect.origin.y + 1.0),
-        NSSize::new(10.0, 8.0),
-    ));
-    let body = NSBezierPath::new();
-    body.moveToPoint(NSPoint::new(rect.origin.x + 1.0, rect.origin.y + 9.0));
-    body.lineToPoint(NSPoint::new(rect.origin.x + 13.0, rect.origin.y + 9.0));
-    body.lineToPoint(NSPoint::new(rect.origin.x + 7.0, rect.origin.y + 16.0));
-    body.closePath();
-
+fn draw_pin_marker(rect: NSRect, filled: bool, color: &NSColor) {
+    let path = NSBezierPath::bezierPathWithOvalInRect(rect);
     if filled {
         color.setFill();
-        head.fill();
-        body.fill();
+        path.fill();
     } else {
         color.setStroke();
-        head.setLineWidth(1.0);
-        head.stroke();
-        body.setLineWidth(1.0);
-        body.stroke();
+        path.setLineWidth(1.5);
+        path.stroke();
+    }
+}
+
+fn content_summary(clip: &Clip) -> String {
+    match (clip.width, clip.height) {
+        (Some(width), Some(height)) if clip.kind == ClipKind::Image => {
+            format!(
+                "Image · {}×{} · {}",
+                width,
+                height,
+                human_size(clip.byte_len)
+            )
+        }
+        _ => clip.content_title().to_string(),
     }
 }
 
 fn image_title(clip: &Clip) -> String {
+    if let Some(title) = &clip.title
+        && !title.is_empty()
+    {
+        return title.clone();
+    }
     match (clip.width, clip.height) {
         (Some(width), Some(height)) => {
             format!(
@@ -516,6 +755,10 @@ fn image_title(clip: &Clip) -> String {
 }
 
 fn draw_image_fit(rect: NSRect, image: &NSImage) {
+    draw_image_fit_alpha(rect, image, 1.0);
+}
+
+fn draw_image_fit_alpha(rect: NSRect, image: &NSImage, alpha: f64) {
     let size = image.size();
     if size.width <= 0.0 || size.height <= 0.0 || rect.size.width <= 0.0 || rect.size.height <= 0.0
     {
@@ -531,7 +774,207 @@ fn draw_image_fit(rect: NSRect, image: &NSImage) {
         ),
         NSSize::new(width, height),
     );
-    image.drawInRect(fitted);
+    unsafe {
+        image.drawInRect_fromRect_operation_fraction_respectFlipped_hints(
+            fitted,
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
+            NSCompositingOperation::SourceOver,
+            alpha,
+            true,
+            None,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hover preview
+// ---------------------------------------------------------------------------
+
+const HOVER_PREVIEW_W: f64 = 380.0;
+const HOVER_PADDING: f64 = 10.0;
+const HOVER_META_H: f64 = 16.0;
+const HOVER_GAP: f64 = 8.0;
+const HOVER_BODY_MAX_H: f64 = 119.0;
+
+#[derive(Clone)]
+pub(crate) struct HoverPreviewParts {
+    pub panel: Retained<NSPanel>,
+    pub icon: Retained<NSImageView>,
+    pub body: Retained<NSTextField>,
+    pub meta: Retained<NSTextField>,
+}
+
+pub(crate) fn build_hover_preview(mtm: MainThreadMarker) -> HoverPreviewParts {
+    let panel: Retained<NSPanel> = unsafe {
+        msg_send![
+            NSPanel::alloc(mtm),
+            initWithContentRect: NSRect::new(
+                NSPoint::new(0.0, 0.0),
+                NSSize::new(HOVER_PREVIEW_W, 80.0)
+            ),
+            styleMask: NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel,
+            backing: NSBackingStoreType::Buffered,
+            defer: false
+        ]
+    };
+    panel.setOpaque(false);
+    panel.setBackgroundColor(Some(&NSColor::clearColor()));
+    panel.setLevel(NSFloatingWindowLevel);
+    panel.setHasShadow(true);
+    panel.setIgnoresMouseEvents(true);
+    panel.setHidesOnDeactivate(true);
+    panel.setCollectionBehavior(
+        NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary,
+    );
+
+    let bg = NSVisualEffectView::new(mtm);
+    bg.setFrame(NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(HOVER_PREVIEW_W, 80.0),
+    ));
+    bg.setMaterial(NSVisualEffectMaterial::Popover);
+    bg.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+    bg.setState(NSVisualEffectState::Active);
+    bg.setWantsLayer(true);
+    if let Some(layer) = bg.layer() {
+        layer.setCornerRadius(10.0);
+        layer.setMasksToBounds(true);
+    }
+    panel.setContentView(Some(&bg));
+
+    let body = NSTextField::wrappingLabelWithString(&NSString::from_str(""), mtm);
+    body.setFrame(NSRect::new(
+        NSPoint::new(HOVER_PADDING, HOVER_PADDING + HOVER_META_H + HOVER_GAP),
+        NSSize::new(HOVER_PREVIEW_W - HOVER_PADDING * 2.0, HOVER_BODY_MAX_H),
+    ));
+    body.setFont(Some(&NSFont::systemFontOfSize(13.0)));
+    body.setTextColor(Some(&NSColor::labelColor()));
+    body.setMaximumNumberOfLines(7);
+    bg.addSubview(&body);
+
+    let icon = NSImageView::new(mtm);
+    icon.setFrame(NSRect::new(
+        NSPoint::new(HOVER_PADDING, HOVER_PADDING),
+        NSSize::new(16.0, 16.0),
+    ));
+    icon.setImageScaling(NSImageScaling::ScaleProportionallyUpOrDown);
+    icon.setImageFrameStyle(NSImageFrameStyle::None);
+    icon.setAlphaValue(0.8);
+    icon.setHidden(true);
+    bg.addSubview(&icon);
+
+    let meta = NSTextField::labelWithString(&NSString::from_str(""), mtm);
+    meta.setFrame(NSRect::new(
+        NSPoint::new(HOVER_PADDING, HOVER_PADDING),
+        NSSize::new(HOVER_PREVIEW_W - HOVER_PADDING * 2.0, HOVER_META_H),
+    ));
+    meta.setFont(Some(&NSFont::systemFontOfSize(11.0)));
+    meta.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    bg.addSubview(&meta);
+
+    HoverPreviewParts {
+        panel,
+        icon,
+        body,
+        meta,
+    }
+}
+
+pub(crate) fn present_hover_preview(
+    mtm: MainThreadMarker,
+    parts: &HoverPreviewParts,
+    body_text: Option<&str>,
+    meta_text: &str,
+    icon: Option<&NSImage>,
+) {
+    let panel = &parts.panel;
+    let icon_view = &parts.icon;
+    let body = &parts.body;
+    let meta = &parts.meta;
+    let inner_width = HOVER_PREVIEW_W - HOVER_PADDING * 2.0;
+    icon_view.setImage(icon);
+    icon_view.setHidden(icon.is_none());
+    let meta_left = if icon.is_some() {
+        HOVER_PADDING + 22.0
+    } else {
+        HOVER_PADDING
+    };
+    let meta_width = (HOVER_PREVIEW_W - HOVER_PADDING - meta_left).max(0.0);
+    meta.setStringValue(&NSString::from_str(meta_text));
+
+    let (height, body_height) = match body_text.filter(|text| !text.is_empty()) {
+        Some(text) => {
+            body.setHidden(false);
+            body.setStringValue(&NSString::from_str(text));
+            body.setFrameSize(NSSize::new(inner_width, HOVER_BODY_MAX_H));
+            let measured = body
+                .cell()
+                .map(|cell| cell.cellSizeForBounds(body.bounds()).height)
+                .unwrap_or(17.0);
+            let body_height = if measured.is_finite() {
+                measured.clamp(17.0, HOVER_BODY_MAX_H)
+            } else {
+                17.0
+            };
+            (
+                HOVER_PADDING + body_height + HOVER_GAP + HOVER_META_H + HOVER_PADDING,
+                body_height,
+            )
+        }
+        None => {
+            body.setHidden(true);
+            (HOVER_PADDING + HOVER_META_H + HOVER_PADDING, 0.0)
+        }
+    };
+
+    let origin = panel.frame().origin;
+    panel.setFrame_display(
+        NSRect::new(origin, NSSize::new(HOVER_PREVIEW_W, height)),
+        true,
+    );
+    if let Some(content) = panel.contentView() {
+        content.setFrame(NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(HOVER_PREVIEW_W, height),
+        ));
+    }
+    meta.setFrame(NSRect::new(
+        NSPoint::new(meta_left, HOVER_PADDING),
+        NSSize::new(meta_width, HOVER_META_H),
+    ));
+    body.setFrame(NSRect::new(
+        NSPoint::new(HOVER_PADDING, HOVER_PADDING + HOVER_META_H + HOVER_GAP),
+        NSSize::new(inner_width, body_height),
+    ));
+
+    let mouse = NSEvent::mouseLocation();
+    let screen = NSScreen::screens(mtm)
+        .iter()
+        .find(|screen| {
+            let frame = screen.frame();
+            mouse.x >= frame.origin.x
+                && mouse.x <= frame.origin.x + frame.size.width
+                && mouse.y >= frame.origin.y
+                && mouse.y <= frame.origin.y + frame.size.height
+        })
+        .or_else(|| NSScreen::mainScreen(mtm));
+    if let Some(screen) = screen {
+        let visible = screen.visibleFrame();
+        // Stay next to the pointer, like a tooltip. Flip to the other side only
+        // when the preferred side would leave the screen.
+        let mut x = mouse.x + 18.0;
+        if x + HOVER_PREVIEW_W > visible.origin.x + visible.size.width {
+            x = mouse.x - HOVER_PREVIEW_W - 18.0;
+        }
+        let mut y = mouse.y - height / 2.0;
+        x = x.max(visible.origin.x + 8.0);
+        y = y
+            .max(visible.origin.y + 8.0)
+            .min(visible.origin.y + visible.size.height - height - 8.0);
+        panel.setFrameOrigin(NSPoint::new(x, y));
+    }
+    panel.orderFrontRegardless();
 }
 
 // ---------------------------------------------------------------------------
@@ -1127,14 +1570,12 @@ pub(crate) struct PanelParts {
     pub list: Retained<ClipListView>,
     pub footer: Retained<NSTextField>,
     pub section_control: Retained<NSSegmentedControl>,
-    pub clear_text_button: Retained<NSButton>,
-    pub clear_images_button: Retained<NSButton>,
+    pub clear_all_button: Retained<NSButton>,
+    pub clear_unpinned_button: Retained<NSButton>,
     pub export_pdf_button: Retained<NSButton>,
     pub refresh_commands_button: Retained<NSButton>,
-    pub pin_outline: Option<Retained<NSImage>>,
-    pub pin_filled: Option<Retained<NSImage>>,
-    pub pin_outline_selected: Option<Retained<NSImage>>,
-    pub pin_filled_selected: Option<Retained<NSImage>>,
+    pub title_symbol: Option<Retained<NSImage>>,
+    pub title_symbol_selected: Option<Retained<NSImage>>,
 }
 
 pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) -> PanelParts {
@@ -1143,6 +1584,7 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
     panel.setBackgroundColor(Some(&NSColor::clearColor()));
     panel.setLevel(NSFloatingWindowLevel);
     panel.setBecomesKeyOnlyIfNeeded(false);
+    panel.setAcceptsMouseMovedEvents(true);
     panel.setHasShadow(true);
     panel.setCollectionBehavior(
         NSWindowCollectionBehavior::CanJoinAllSpaces
@@ -1227,45 +1669,45 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
     footer.setTextColor(Some(&NSColor::secondaryLabelColor()));
     bg.addSubview(&footer);
 
-    let clear_text_button = unsafe {
+    let clear_all_button = unsafe {
         NSButton::buttonWithTitle_target_action(
-            &NSString::from_str("Clear Text"),
+            &NSString::from_str("Clear All"),
             Some(as_any(delegate)),
-            Some(sel!(clearTextSection:)),
+            Some(sel!(clearCurrentSection:)),
             mtm,
         )
     };
-    clear_text_button.setFrame(NSRect::new(
-        NSPoint::new(232.0, 6.0),
-        NSSize::new(94.0, 22.0),
+    clear_all_button.setFrame(NSRect::new(
+        NSPoint::new(248.0, 6.0),
+        NSSize::new(72.0, 22.0),
     ));
-    clear_text_button.setBezelStyle(NSBezelStyle::Automatic);
-    clear_text_button.setControlSize(NSControlSize::Small);
-    clear_text_button.setFont(Some(&NSFont::systemFontOfSize(10.0)));
-    clear_text_button.setToolTip(Some(&NSString::from_str(
-        "Delete all text, rich text, HTML and file clippings",
+    clear_all_button.setBezelStyle(NSBezelStyle::Automatic);
+    clear_all_button.setControlSize(NSControlSize::Small);
+    clear_all_button.setFont(Some(&NSFont::systemFontOfSize(10.0)));
+    clear_all_button.setToolTip(Some(&NSString::from_str(
+        "Delete every clipping in this tab, including pinned rows",
     )));
-    bg.addSubview(&clear_text_button);
+    bg.addSubview(&clear_all_button);
 
-    let clear_images_button = unsafe {
+    let clear_unpinned_button = unsafe {
         NSButton::buttonWithTitle_target_action(
-            &NSString::from_str("Clear Images"),
+            &NSString::from_str("Clear Unpinned"),
             Some(as_any(delegate)),
-            Some(sel!(clearImagesSection:)),
+            Some(sel!(clearCurrentUnpinned:)),
             mtm,
         )
     };
-    clear_images_button.setFrame(NSRect::new(
-        NSPoint::new(330.0, 6.0),
-        NSSize::new(116.0, 22.0),
+    clear_unpinned_button.setFrame(NSRect::new(
+        NSPoint::new(328.0, 6.0),
+        NSSize::new(118.0, 22.0),
     ));
-    clear_images_button.setBezelStyle(NSBezelStyle::Automatic);
-    clear_images_button.setControlSize(NSControlSize::Small);
-    clear_images_button.setFont(Some(&NSFont::systemFontOfSize(10.0)));
-    clear_images_button.setToolTip(Some(&NSString::from_str(
-        "Delete all copied images and their thumbnails",
+    clear_unpinned_button.setBezelStyle(NSBezelStyle::Automatic);
+    clear_unpinned_button.setControlSize(NSControlSize::Small);
+    clear_unpinned_button.setFont(Some(&NSFont::systemFontOfSize(10.0)));
+    clear_unpinned_button.setToolTip(Some(&NSString::from_str(
+        "Delete unpinned clippings in this tab; pinned rows are kept",
     )));
-    bg.addSubview(&clear_images_button);
+    bg.addSubview(&clear_unpinned_button);
 
     let export_pdf_button = unsafe {
         NSButton::buttonWithTitle_target_action(
@@ -1276,7 +1718,7 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
         )
     };
     export_pdf_button.setFrame(NSRect::new(
-        NSPoint::new(166.0, 6.0),
+        NSPoint::new(178.0, 6.0),
         NSSize::new(62.0, 22.0),
     ));
     export_pdf_button.setBezelStyle(NSBezelStyle::Automatic);
@@ -1297,7 +1739,7 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
         )
     };
     refresh_commands_button.setFrame(NSRect::new(
-        NSPoint::new(166.0, 6.0),
+        NSPoint::new(384.0, 6.0),
         NSSize::new(62.0, 22.0),
     ));
     refresh_commands_button.setBezelStyle(NSBezelStyle::Automatic);
@@ -1309,14 +1751,18 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
     refresh_commands_button.setHidden(true);
     bg.addSubview(&refresh_commands_button);
 
-    let pin_outline = pin_symbol(
-        "pin",
-        &NSColor::secondaryLabelColor().colorWithAlphaComponent(0.8),
+    let title_symbol = tinted_symbol(
+        "pencil",
+        "Custom title",
+        10.0,
+        &NSColor::labelColor().colorWithAlphaComponent(0.72),
     );
-    let pin_filled = pin_symbol("pin.fill", &NSColor::controlAccentColor());
-    let pin_outline_selected =
-        pin_symbol("pin", &NSColor::whiteColor().colorWithAlphaComponent(0.8));
-    let pin_filled_selected = pin_symbol("pin.fill", &NSColor::whiteColor());
+    let title_symbol_selected = tinted_symbol(
+        "pencil",
+        "Custom title",
+        10.0,
+        &NSColor::whiteColor().colorWithAlphaComponent(0.95),
+    );
 
     PanelParts {
         panel,
@@ -1324,15 +1770,29 @@ pub(crate) fn build_panel(mtm: MainThreadMarker, delegate: &app::AppDelegate) ->
         list,
         footer,
         section_control,
-        clear_text_button,
-        clear_images_button,
+        clear_all_button,
+        clear_unpinned_button,
         export_pdf_button,
         refresh_commands_button,
-        pin_outline,
-        pin_filled,
-        pin_outline_selected,
-        pin_filled_selected,
+        title_symbol,
+        title_symbol_selected,
     }
+}
+
+fn tinted_symbol(
+    name: &str,
+    description: &str,
+    size: f64,
+    color: &NSColor,
+) -> Option<Retained<NSImage>> {
+    let base = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+        &NSString::from_str(name),
+        Some(&NSString::from_str(description)),
+    )?;
+    let size_config = NSImageSymbolConfiguration::configurationWithPointSize_weight(size, 0.0);
+    let tint = NSImageSymbolConfiguration::configurationWithHierarchicalColor(color);
+    let config = size_config.configurationByApplyingConfiguration(&tint);
+    base.imageWithSymbolConfiguration(&config)
 }
 
 fn segment_symbol(name: &str, description: &str) -> Option<Retained<NSImage>> {
@@ -1344,17 +1804,6 @@ fn segment_symbol(name: &str, description: &str) -> Option<Retained<NSImage>> {
     let image = base.imageWithSymbolConfiguration(&config)?;
     image.setTemplate(true);
     Some(image)
-}
-
-fn pin_symbol(name: &str, color: &NSColor) -> Option<Retained<NSImage>> {
-    let base = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-        &NSString::from_str(name),
-        Some(&NSString::from_str("Pin clipping")),
-    )?;
-    let size = NSImageSymbolConfiguration::configurationWithPointSize_weight(13.0, 0.0);
-    let tint = NSImageSymbolConfiguration::configurationWithHierarchicalColor(color);
-    let config = size.configurationByApplyingConfiguration(&tint);
-    base.imageWithSymbolConfiguration(&config)
 }
 
 // ---------------------------------------------------------------------------
@@ -1370,7 +1819,16 @@ pub(crate) struct PrefsParts {
     pub paste_box: Retained<NSButton>,
     pub login_box: Retained<NSButton>,
     pub shortcut_button: Retained<NSButton>,
+    pub pinned_background_well: Retained<NSColorWell>,
+    pub pinned_indicator_well: Retained<NSColorWell>,
     pub ignored_view: Retained<IgnoredAppsView>,
+    pub history_summary: Retained<NSTextField>,
+    pub history_storage: Retained<NSTextField>,
+    pub delete_all_clippings: Retained<NSButton>,
+    pub delete_all_images: Retained<NSButton>,
+    pub delete_all_text: Retained<NSButton>,
+    pub delete_unpinned_text: Retained<NSButton>,
+    pub delete_unpinned_images: Retained<NSButton>,
 }
 
 fn label(text: &str, frame: NSRect, size: f64, mtm: MainThreadMarker) -> Retained<NSTextField> {
@@ -1601,6 +2059,111 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
         mtm,
     ));
 
+    // ---- Appearance ----
+    let appearance = NSView::new(mtm);
+    appearance.setFrame(NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(468.0, 408.0),
+    ));
+
+    appearance.addSubview(&heading(
+        "Pinned Clips",
+        NSRect::new(NSPoint::new(16.0, 370.0), NSSize::new(400.0, 18.0)),
+        mtm,
+    ));
+    appearance.addSubview(&secondary_label(
+        "Pinned rows keep a tinted background and a filled marker.",
+        NSRect::new(NSPoint::new(16.0, 340.0), NSSize::new(436.0, 18.0)),
+        11.0,
+        mtm,
+    ));
+
+    let (pinned_background, pinned_indicator) =
+        with_state(|s: &mut AppState| (s.settings.pinned_background, s.settings.pinned_indicator));
+
+    appearance.addSubview(&label(
+        "Row background",
+        NSRect::new(NSPoint::new(16.0, 298.0), NSSize::new(140.0, 20.0)),
+        13.0,
+        mtm,
+    ));
+
+    let pinned_background_well = NSColorWell::colorWellWithStyle(NSColorWellStyle::Default, mtm);
+    pinned_background_well.setFrame(NSRect::new(
+        NSPoint::new(168.0, 290.0),
+        NSSize::new(44.0, 28.0),
+    ));
+    pinned_background_well.setSupportsAlpha(false);
+    pinned_background_well.setColor(&color_from_rgb(pinned_background));
+    pinned_background_well
+        .setAccessibilityLabel(Some(&NSString::from_str("Pinned row background color")));
+    unsafe {
+        pinned_background_well.setTarget(Some(target));
+        pinned_background_well.setAction(Some(sel!(pinnedBackgroundChanged:)));
+    }
+    appearance.addSubview(&pinned_background_well);
+
+    appearance.addSubview(&label(
+        "Marker",
+        NSRect::new(NSPoint::new(16.0, 258.0), NSSize::new(140.0, 20.0)),
+        13.0,
+        mtm,
+    ));
+
+    let pinned_indicator_well = NSColorWell::colorWellWithStyle(NSColorWellStyle::Default, mtm);
+    pinned_indicator_well.setFrame(NSRect::new(
+        NSPoint::new(168.0, 250.0),
+        NSSize::new(44.0, 28.0),
+    ));
+    pinned_indicator_well.setSupportsAlpha(false);
+    pinned_indicator_well.setColor(&color_from_rgb(pinned_indicator));
+    pinned_indicator_well.setAccessibilityLabel(Some(&NSString::from_str("Pinned marker color")));
+    unsafe {
+        pinned_indicator_well.setTarget(Some(target));
+        pinned_indicator_well.setAction(Some(sel!(pinnedIndicatorChanged:)));
+    }
+    appearance.addSubview(&pinned_indicator_well);
+
+    appearance.addSubview(&secondary_label(
+        "The background is a soft tint so text stays readable.",
+        NSRect::new(NSPoint::new(16.0, 214.0), NSSize::new(436.0, 18.0)),
+        11.0,
+        mtm,
+    ));
+    appearance.addSubview(&secondary_label(
+        "Changes apply when you reopen the history list.",
+        NSRect::new(NSPoint::new(16.0, 190.0), NSSize::new(436.0, 18.0)),
+        11.0,
+        mtm,
+    ));
+
+    let restore_button = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str("Restore Defaults"),
+            Some(target),
+            Some(sel!(restorePinnedColors:)),
+            mtm,
+        )
+    };
+    restore_button.setFrame(NSRect::new(
+        NSPoint::new(16.0, 140.0),
+        NSSize::new(150.0, 30.0),
+    ));
+    restore_button.setBezelStyle(NSBezelStyle::Automatic);
+    restore_button.setControlSize(NSControlSize::Small);
+    restore_button.setFont(Some(&NSFont::systemFontOfSize(11.0)));
+    restore_button.setToolTip(Some(&NSString::from_str(
+        "Restore the original yellow background and violet marker",
+    )));
+    appearance.addSubview(&restore_button);
+
+    appearance.addSubview(&secondary_label(
+        "Restores the original yellow card and violet marker.",
+        NSRect::new(NSPoint::new(180.0, 146.0), NSSize::new(272.0, 18.0)),
+        11.0,
+        mtm,
+    ));
+
     // ---- Exceptions ----
     let exceptions = NSView::new(mtm);
     exceptions.setFrame(NSRect::new(
@@ -1676,15 +2239,183 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
         mtm,
     ));
 
+    // ---- History ----
+    let history = NSView::new(mtm);
+    history.setFrame(NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(468.0, 408.0),
+    ));
+
+    history.addSubview(&heading(
+        "Delete History",
+        NSRect::new(NSPoint::new(16.0, 370.0), NSSize::new(400.0, 18.0)),
+        mtm,
+    ));
+    history.addSubview(&secondary_label(
+        "These actions delete clippings only. Terminal commands are kept.",
+        NSRect::new(NSPoint::new(16.0, 342.0), NSSize::new(436.0, 18.0)),
+        11.0,
+        mtm,
+    ));
+    let history_summary = secondary_label(
+        "0 text · 0 images · 0 pinned",
+        NSRect::new(NSPoint::new(16.0, 322.0), NSSize::new(436.0, 18.0)),
+        11.0,
+        mtm,
+    );
+    history.addSubview(&history_summary);
+
+    let history_storage = secondary_label(
+        "Disk usage: calculating…",
+        NSRect::new(NSPoint::new(16.0, 298.0), NSSize::new(436.0, 18.0)),
+        11.0,
+        mtm,
+    );
+    history_storage.setToolTip(Some(&NSString::from_str(
+        "History includes the index and stored blobs. Cache holds thumbnails and Quick Look previews; macOS clears it at boot.",
+    )));
+    history.addSubview(&history_storage);
+
+    history.addSubview(&label(
+        "All Clippings",
+        NSRect::new(NSPoint::new(16.0, 270.0), NSSize::new(200.0, 20.0)),
+        13.0,
+        mtm,
+    ));
+    let delete_all_clippings = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str("Delete All Clippings…"),
+            Some(target),
+            Some(sel!(deleteAllClippings:)),
+            mtm,
+        )
+    };
+    delete_all_clippings.setFrame(NSRect::new(
+        NSPoint::new(16.0, 234.0),
+        NSSize::new(190.0, 30.0),
+    ));
+    delete_all_clippings.setToolTip(Some(&NSString::from_str(
+        "Delete every text and image clipping, including pinned ones",
+    )));
+    history.addSubview(&delete_all_clippings);
+    history.addSubview(&secondary_label(
+        "Text and images, pinned included.",
+        NSRect::new(NSPoint::new(216.0, 240.0), NSSize::new(236.0, 18.0)),
+        11.0,
+        mtm,
+    ));
+
+    history.addSubview(&label(
+        "Images",
+        NSRect::new(NSPoint::new(16.0, 202.0), NSSize::new(200.0, 20.0)),
+        13.0,
+        mtm,
+    ));
+    let delete_all_images = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str("Delete All Images…"),
+            Some(target),
+            Some(sel!(deleteAllImages:)),
+            mtm,
+        )
+    };
+    delete_all_images.setFrame(NSRect::new(
+        NSPoint::new(16.0, 166.0),
+        NSSize::new(170.0, 30.0),
+    ));
+    delete_all_images.setToolTip(Some(&NSString::from_str(
+        "Delete every image clipping and its thumbnail, including pinned ones",
+    )));
+    history.addSubview(&delete_all_images);
+
+    let delete_unpinned_images = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str("Delete Unpinned Images…"),
+            Some(target),
+            Some(sel!(deleteUnpinnedImages:)),
+            mtm,
+        )
+    };
+    delete_unpinned_images.setFrame(NSRect::new(
+        NSPoint::new(194.0, 166.0),
+        NSSize::new(190.0, 30.0),
+    ));
+    delete_unpinned_images.setToolTip(Some(&NSString::from_str(
+        "Delete every unpinned image clipping; pinned images are kept",
+    )));
+    history.addSubview(&delete_unpinned_images);
+    history.addSubview(&secondary_label(
+        "The unpinned action keeps pinned images.",
+        NSRect::new(NSPoint::new(16.0, 138.0), NSSize::new(436.0, 18.0)),
+        11.0,
+        mtm,
+    ));
+
+    history.addSubview(&label(
+        "Text",
+        NSRect::new(NSPoint::new(16.0, 110.0), NSSize::new(200.0, 20.0)),
+        13.0,
+        mtm,
+    ));
+    let delete_all_text = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str("Delete All Text…"),
+            Some(target),
+            Some(sel!(deleteAllText:)),
+            mtm,
+        )
+    };
+    delete_all_text.setFrame(NSRect::new(
+        NSPoint::new(16.0, 74.0),
+        NSSize::new(170.0, 30.0),
+    ));
+    delete_all_text.setToolTip(Some(&NSString::from_str(
+        "Delete every text, rich text, HTML and file clipping, including pinned ones",
+    )));
+    history.addSubview(&delete_all_text);
+
+    let delete_unpinned_text = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str("Delete Unpinned Text…"),
+            Some(target),
+            Some(sel!(deleteUnpinnedText:)),
+            mtm,
+        )
+    };
+    delete_unpinned_text.setFrame(NSRect::new(
+        NSPoint::new(194.0, 74.0),
+        NSSize::new(190.0, 30.0),
+    ));
+    delete_unpinned_text.setToolTip(Some(&NSString::from_str(
+        "Delete unpinned text, rich text, HTML and file clippings; pinned text is kept",
+    )));
+    history.addSubview(&delete_unpinned_text);
+    history.addSubview(&secondary_label(
+        "The unpinned action keeps pinned text, rich text, HTML and files.",
+        NSRect::new(NSPoint::new(16.0, 46.0), NSSize::new(436.0, 18.0)),
+        11.0,
+        mtm,
+    ));
+
     let general_item = NSTabViewItem::new();
     general_item.setLabel(&NSString::from_str("General"));
     general_item.setView(Some(&general));
     tabs.addTabViewItem(&general_item);
 
+    let appearance_item = NSTabViewItem::new();
+    appearance_item.setLabel(&NSString::from_str("Appearance"));
+    appearance_item.setView(Some(&appearance));
+    tabs.addTabViewItem(&appearance_item);
+
     let exceptions_item = NSTabViewItem::new();
     exceptions_item.setLabel(&NSString::from_str("Exceptions"));
     exceptions_item.setView(Some(&exceptions));
     tabs.addTabViewItem(&exceptions_item);
+
+    let history_item = NSTabViewItem::new();
+    history_item.setLabel(&NSString::from_str("History"));
+    history_item.setView(Some(&history));
+    tabs.addTabViewItem(&history_item);
 
     if let Some(content) = window.contentView() {
         content.addSubview(&tabs);
@@ -1699,7 +2430,16 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
         paste_box,
         login_box,
         shortcut_button,
+        pinned_background_well,
+        pinned_indicator_well,
         ignored_view,
+        history_summary,
+        history_storage,
+        delete_all_clippings,
+        delete_all_images,
+        delete_all_text,
+        delete_unpinned_text,
+        delete_unpinned_images,
     }
 }
 

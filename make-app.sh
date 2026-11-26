@@ -33,9 +33,14 @@ if [ "$UNIVERSAL" = "1" ]; then
     -output "$APP/Contents/MacOS/AntiRustPaste" \
     target/aarch64-apple-darwin/release/antirustpaste \
     target/x86_64-apple-darwin/release/antirustpaste
+  lipo -create \
+    -output "$APP/Contents/MacOS/antirustpaste-mcp" \
+    target/aarch64-apple-darwin/release/antirustpaste-mcp \
+    target/x86_64-apple-darwin/release/antirustpaste-mcp
   echo "Architectures: $(lipo -archs "$APP/Contents/MacOS/AntiRustPaste")"
 else
   cp target/release/antirustpaste "$APP/Contents/MacOS/AntiRustPaste"
+  cp target/release/antirustpaste-mcp "$APP/Contents/MacOS/antirustpaste-mcp"
 fi
 cp packaging/Info.plist "$APP/Contents/Info.plist"
 cp assets/app-icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
@@ -43,6 +48,7 @@ cp assets/app-icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 # Ad-hoc signature: keeps the bundle valid and gives TCC a stable identity for
 # the Accessibility permission needed to synthesise ⌘V.
+codesign --force --sign - "$APP/Contents/MacOS/antirustpaste-mcp" >/dev/null 2>&1 || true
 codesign --force --sign - "$APP" >/dev/null 2>&1 || true
 
 echo "Built $APP (version $VERSION)"

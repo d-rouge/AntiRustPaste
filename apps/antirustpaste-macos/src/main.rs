@@ -20,6 +20,7 @@ Usage: antirustpaste [--help | --version]
 
 Environment (for tests and automation):
   ANTIRUSTPASTE_DATA_DIR           history directory (default: Application Support/AntiRustPaste)
+  ANTIRUSTPASTE_CONTROL_SOCKET     absolute path for the local MCP control socket
   ANTIRUSTPASTE_DEFAULTS_SUITE     user defaults suite name (isolates preferences)
   ANTIRUSTPASTE_LAUNCH_AGENT_DIR   directory for the login item plist
   ANTIRUSTPASTE_OPEN_PREFS=1       open Preferences at launch

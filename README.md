@@ -1,95 +1,159 @@
 # AntiRustPaste
 
-A clipboard history manager for macOS, written entirely in Rust and inspired by
-[CopyClip](https://fiplab.com/apps/copyclip-for-mac). No Swift or Objective-C
-sources: AppKit is driven through the [`objc2`](https://crates.io/crates/objc2)
-bindings, and the few C APIs (Carbon hot key, CoreGraphics events, pasteboard)
-are called through small FFI shims.
+AntiRustPaste is a clipboard history manager for macOS. It lives in the menu
+bar, keeps what you copy searchable, and lets you paste it back with the
+keyboard. Text, rich text, HTML, images and file URLs are supported, plus
+on-demand history from zsh and bash.
+
+The app is written entirely in Rust. AppKit is used through
+[`objc2`](https://crates.io/crates/objc2); there are no Swift or Objective-C
+sources. The macOS app is the supported release. A Linux GTK4/X11 port lives in
+the workspace and is tracked in the [roadmap](ROADMAP.md).
+
+## Install
+
+1. Download the latest universal build from the
+   [releases page](https://github.com/d-rouge/AntiRustPaste/releases/latest).
+   The `.dmg`, `.zip` and `SHA256SUMS.txt` are assets of a release.
+2. Open **AntiRustPaste.app**. The build is ad-hoc signed but not notarized, so
+   on first launch right-click the app and choose **Open**.
+3. Look for the clipboard icon in the menu bar. There is no Dock icon: this is a
+   menu-bar accessory app.
+4. Left-click the icon to open the history, or right-click it for the status
+   menu and Preferences.
+
+Requirements: macOS 13 or newer. Accessibility permission is needed only if you
+enable automatic pasting; copying clips never needs it.
+
+## Quick start
+
+- Copy something normally. It appears in the history within about a second.
+- Press **⇧⌘V** to open the popup, type to search, and press **⏎** to choose a
+  clip. The previous app comes back to the front.
+- By default the clip is only put on the clipboard; paste it with **⌘V**. Enable
+  **Paste after choosing a clipping** in Preferences if you want AntiRustPaste
+  to paste for you.
+- Pin the clips you want to keep with the circle on the right of a row or
+  **⌘P**. Pinned clips stay at the top and are never removed by automatic
+  trimming.
 
 ## Features
 
-- Lives in the menu bar (`LSUIElement`), no Dock icon.
-- Watches the general pasteboard and keeps a searchable history of:
-  text, rich text (RTF), HTML, images (PNG/TIFF/JPEG) and file URLs.
-- **Text**, **Images** and **Commands** tabs, shown as icon segments with
-  tooltips. Images get pure-Rust thumbnails from a disposable, boot-cleared
-  cache, generated on a background worker.
-- The **Commands** tab reads zsh and bash history files on demand, when you open
-  the tab or press **Refresh** (`⌘R`); it never watches them in the background.
-  Commands support the same live search, pinning and one-key choice as clippings.
-- Skips concealed/transient pasteboard items (password managers).
-- Remembers the app a clipping came from and shows it in the list.
+### Capture
+
+- Watches the general pasteboard for text, rich text (RTF), HTML, PNG/TIFF/JPEG
+  images and file URLs.
+- Skips concealed and transient pasteboard items from password managers.
+- **Text**, **Images** and **Commands** tabs keep the three kinds separate.
 - Re-copying something already in the history moves it to the top instead of
-  duplicating it.
-- Quick Look preview for images: press Space on the Images tab (or `⌘Y`) to
-  open the selected image in the system preview panel, exactly like Finder.
-- Pin clippings with the pin icon on each row (or `⌘P`) to keep them above the
-  list and exempt from automatic trimming until explicitly deleted. Pinned rows
-  are grouped under a **PINNED** header in their own card, separate from
-  **RECENT**.
-- Global shortcut (⇧⌘V by default, recordable in Preferences) opens the popup.
-- Popup with live search, keyboard navigation, ⏎ to choose, ⌫ to delete, esc to
-  close. Choosing a clipping writes it to the pasteboard and reactivates the
-  previous app, so you paste it yourself with ⌘V. An optional preference also
-  synthesises ⌘V for you.
-- Status menu with Preferences, Export Images to PDF…, Clear All Clippings
-  (clippings and thumbnails; terminal commands are kept), About, Check for
-  Updates… and Quit.
-- Footer buttons that clear only the **Text** section or only the **Images**
-  section, with the same delete confirmation. **Clear All Clippings** keeps the
-  commands, because they come from your own shell history; delete a command row
-  with ⌫ to remove it.
-- **Export images to PDF**: pick and drag-reorder images in a dedicated window
-  (Images-tab **PDF…** button, status menu or `⌘E`) and save one A4 page per
-  image with the system save dialog. Original blobs are embedded, not
-  thumbnails; large images are scaled to fit the page and small ones keep their
-  native size.
-- Preferences: history limit, record toggle, confirm-before-delete, start at
-  login, global shortcut, and an ignored-apps list.
-- History limit from 1 to 9999 items per section (200 by default); clippings and
-  commands keep independent budgets.
-- Start at login through a per-user LaunchAgent.
-- **Update check**: at launch, and from **Check for Updates…** in the About
-  dialog, the app asks the GitHub Releases API for a newer version. It verifies
-  the release's `SHA256SUMS.txt`, replaces the running app bundle and restarts.
-  Automatic checks run only in the packaged app; a development build or a
-  Gatekeeper-translocated copy falls back to the release page.
+  creating a duplicate.
+- **Commands** reads zsh and bash history only when you open the tab or press
+  **Refresh** (**⌘R**); it does not watch your shell files in the background.
 
-## Download
+### Find and use
 
-Grab the latest universal build from the
-[releases page](https://github.com/d-rouge/AntiRustPaste/releases/latest). The
-`.dmg`, `.zip` and `SHA256SUMS.txt` are **assets of a release** (Releases → a
-version → Assets); the repository's *Packages* section is for package
-registries and stays empty.
+- Live search across the preview, full text, source app and title.
+- Arrow keys, **⏎**, **⌘1…⌘9** and a right-click menu for quick access.
+- Quick Look with **Space** (empty search) or **⌘Y** for text, rich text, HTML,
+  images, files and commands.
+- **Copy as Plain Text** for rich clips when you do not want formatting.
+- Optional automatic **⌘V** after choosing a clip.
 
-The build is ad-hoc signed but not notarized: on first launch, right-click
-**AntiRustPaste.app** and choose **Open**.
+### Organise
 
-## Requirements
+- Pin clips to keep them above the recent list and exempt from automatic
+  trimming. Pinned rows get their own card and can be deleted explicitly.
+- Give a clip a searchable title with **Set Title…** (**⌘⇧R**). The row keeps the
+  original content and shows an **Edited** badge.
+- Edit the text of text and command clips with **Edit Text…** (**⌘⇧E**).
+- Hover a row to see the original content, source app, kind and size in a
+  floating callout.
+- The right-click menu exposes pin, copy, copy as plain text, paste, edit,
+  title, Quick Look and delete for the row under the pointer.
 
-- macOS 13 or newer.
-- A Rust toolchain (edition 2024, Rust 1.88+; required by the imaging crate).
-- The Accessibility permission only if you enable **Paste after choosing a
-  clipping** (off by default): macOS asks the first time AntiRustPaste tries to
-  paste for you. Copy-only use needs no permission.
+### Clean up
 
-## Documentation
+- **Clear All** removes every row in the active Text or Images tab, including
+  pinned rows.
+- **Clear Unpinned** removes only unpinned rows in the active tab.
+- Both actions respect **Confirm before deleting** and always keep terminal
+  commands.
+- Preferences → **History** offers the same cleanup globally: all clippings, all
+  images, all text, unpinned images or unpinned text. It also shows how much
+  space the history and the temporary preview cache use.
+- **Clear Thumbnail Cache** in Preferences removes regenerable previews without
+  touching history.
 
-| Document | Contents |
+### Images and PDF
+
+- The Images tab shows thumbnails generated by a pure-Rust worker.
+- **PDF…** on the Images tab, **Export Images to PDF…** in the status menu, or
+  **⌘E** opens a selection window. Drag rows to set the page order and save one
+  A4 page per image.
+
+### Preferences
+
+History limit, recording on/off, confirm-before-delete, optional automatic
+paste, start at login, the global shortcut, pinned-row colours, ignored apps,
+thumbnail cache cleanup, and the **History** tab.
+
+### Updates
+
+At launch, and from **Check for Updates…**, the app asks the GitHub Releases API
+for a newer version. It verifies the release checksum, replaces the app bundle
+and restarts. Automatic checks run only in the packaged app.
+
+### MCP control
+
+A bundled `antirustpaste-mcp` bridge exposes the running app to an MCP client
+over a private local socket. It can list, read, copy, pin and delete clippings,
+clear scopes, change settings, drive the popup and export images to PDF. It does
+not open a network port. See [MCP control](docs/mcp.md) for setup and the list
+of tools.
+
+## Keyboard
+
+| Shortcut | Action |
 | --- | --- |
-| [Architecture](docs/architecture.md) | Modules, startup, threading, state, storage, paste flow |
-| [Behaviour](docs/behavior.md) | Exact feature contract and edge cases |
-| [Development](docs/development.md) | Build, run, bundle, debugging, permissions |
-| [Testing](docs/testing.md) | Unit tests, GUI matrix, hostile inputs, isolation |
-| [Roadmap](ROADMAP.md) | Pinned-clipping status and image export work |
-| [Decisions](docs/decisions.md) | Why AppKit/objc2, JSON blobs, Carbon, CGEvent, LaunchAgent |
-| [Platforms](docs/platforms.md) | What exists per OS and what is left to implement |
-| [Releasing](docs/releasing.md) | Version bump, release tag, GitHub Actions build and publish |
-| [Agent playbook](docs/agent-playbook.md) | Safe recipes and crash-avoidance patterns |
-| [AGENTS.md](AGENTS.md) | Rules for coding agents in this repository |
+| ⇧⌘V | Open or close the history popup (recordable) |
+| ↑ / ↓ | Move the selection |
+| ⏎ | Choose the selected clip (copies; pastes too if enabled) |
+| ⌘1 … ⌘9 | Choose the 1st–9th visible row of the active tab |
+| ⌘C | Copy the selected clip without pasting |
+| Space | Quick Look the selected row (when the search is empty) |
+| ⌘Y | Quick Look the selected row |
+| ⌘⇧E | Edit the text of the selected text or command clip |
+| ⌘P | Pin or unpin the selected clip |
+| ⌘⇧R | Set the selected clip's title |
+| ⌘⇧1 / ⌘⇧2 / ⌘⇧3 | Switch to the Text / Images / Commands tab |
+| ⌘R | Re-read shell history (Commands tab) |
+| ⌫ | Delete the selected clip (when the search is empty) |
+| esc | Close the popup |
 
-## Build and run
+## Data and privacy
+
+History lives in plain files:
+
+```text
+~/Library/Application Support/AntiRustPaste/history.json        index
+~/Library/Application Support/AntiRustPaste/blobs/*.bin         images, RTF, HTML
+~/Library/Application Support/AntiRustPaste/shell-history.json  zsh/bash read cursors
+/tmp/AntiRustPaste-<user>-<hash>/thumbnails/                    boot-cleared cache
+```
+
+- The history is not encrypted. Treat the data directory like any other private
+  local file.
+- `shell-history.json` stores only byte offsets and a short fingerprint, never
+  command text.
+- Thumbnails and Quick Look previews are regenerable and live in the temporary
+  cache.
+- Preferences are stored in the `com.rustclip.app` user-defaults domain. Start
+  at login writes `~/Library/LaunchAgents/com.rustclip.app.plist`.
+- Ignored apps are skipped for new captures; existing history is not purged.
+- MCP control is limited to the local user through a mode-`0600` Unix socket.
+  Anything that can read the history directory can already read the same data.
+
+## Build from source
 
 ```sh
 cargo run -p antirustpaste
@@ -102,155 +166,50 @@ For a real app bundle:
 open dist/AntiRustPaste.app
 ```
 
-To keep it around, copy `dist/AntiRustPaste.app` to `/Applications`.
+Copy `dist/AntiRustPaste.app` to `/Applications` to keep it around. Build and
+test details, environment overrides and contributor recipes live in
+[docs/development.md](docs/development.md) and
+[docs/testing.md](docs/testing.md).
 
-Because it is an accessory app, there is no Dock icon: look for the clipboard
-symbol in the menu bar. Left-click opens the history, right-click opens the
-status menu.
+## Known limitations
 
-`antirustpaste --help` lists the test/automation environment variables;
-`antirustpaste --version` prints the version.
-
-### Checks
-
-```sh
-./scripts/check.sh   # fmt, clippy -D warnings, unit tests
-./scripts/smoke.sh   # isolated 3 s launch, fails on a panic
-```
-
-The smoke script starts the app with throwaway history, preferences and
-login-item paths. It never touches your real clippings or LaunchAgents.
-
-### Testing safely
-
-Never point a development run at your real data. The overrides are:
-
-| Variable | Effect |
-| --- | --- |
-| `ANTIRUSTPASTE_DATA_DIR` | History directory |
-| `ANTIRUSTPASTE_DEFAULTS_SUITE` | Isolated `NSUserDefaults` suite |
-| `ANTIRUSTPASTE_LAUNCH_AGENT_DIR` | Directory for the login-item plist |
-| `ANTIRUSTPASTE_THUMB_CACHE_DIR` | Absolute, dedicated thumbnail cache directory |
-| `ANTIRUSTPASTE_SHELL_HISTORY_DIR` | Directory holding synthetic `.zsh_history`/`.bash_history` |
-| `ANTIRUSTPASTE_DISABLE_UPDATE_CHECK` | Set to `1` to skip the GitHub release check |
-
-Root/temp-root/home and relative cache paths are ignored; the default `/tmp`
-location is used instead. When `ANTIRUSTPASTE_DATA_DIR` is set without
-`ANTIRUSTPASTE_SHELL_HISTORY_DIR`, the Commands tab reads nothing, so an
-isolated test never falls back to the operator's real shell history.
-`ANTIRUSTPASTE_OPEN_PREFS=1`, `ANTIRUSTPASTE_OPEN_PANEL=1`,
-`ANTIRUSTPASTE_OPEN_IMAGES=1` and `ANTIRUSTPASTE_OPEN_COMMANDS=1` open those
-surfaces after launch for automation. See [docs/testing.md](docs/testing.md)
-before any manual GUI test.
-
-## Keyboard
-
-| Shortcut | Action |
-| --- | --- |
-| ⇧⌘V | Open/close the history popup (recordable) |
-| ↑ / ↓ | Move the selection |
-| ⏎ | Choose the selected clipping (copies; pastes too if enabled) |
-| ⌘1 … ⌘9 | Choose the 1st–9th visible row of the active tab |
-| ⌘C | Copy the selected clipping without pasting |
-| ⌘P | Pin / unpin the selected clipping |
-| ⌘⇧1 / ⌘⇧2 / ⌘⇧3 | Switch to the Text / Images / Commands tab |
-| ⌘R | Re-read the shell history (Commands tab) |
-| ⌫ | Delete the selected clipping (when search is empty) |
-| esc | Close the popup |
-
-## Storage
-
-```
-~/Library/Application Support/AntiRustPaste/history.json        # index (clippings + commands)
-~/Library/Application Support/AntiRustPaste/blobs/*.bin         # images / RTF / HTML
-~/Library/Application Support/AntiRustPaste/shell-history.json  # zsh/bash read cursors
-
-Upgrading from 0.1.x renames the old `Application Support/RustClip` directory
-once, automatically; no history is copied or deleted by hand.
-/tmp/AntiRustPaste-<user>-<hash>/thumbnails/thumb-*.png     # macOS, boot-cleared
-```
-
-The index is plain JSON and binary clips live in separate files, so pruning and
-deleting never rewrites large blobs. Terminal commands live in the same index
-but with their own retention budget, so a busy shell cannot evict clippings.
-`shell-history.json` only stores byte offsets and a fingerprint per shell; the
-command text itself is never duplicated there. Thumbnails are regenerable and
-have their own temporary cache; **Clear Thumbnail Cache** in Preferences removes
-it. Preferences live in the standard user defaults domain under `com.rustclip.app`.
-
-Commands are plain text in the history, exactly like clippings, and are not
-encrypted. The **Commands** tab reads `~/.zsh_history` and `~/.bash_history` only
-when opened or refreshed; a custom `$HISTFILE` is not discovered.
-
-Start at login writes:
-
-```
-~/Library/LaunchAgents/com.rustclip.app.plist
-```
-
-## Layout
-
-```
-Cargo.toml                  workspace only
-apps/antirustpaste-macos/        AppKit shell (menu bar, popup, native services)
-crates/antirustpaste-core/       platform-neutral model, storage, settings, filters, thumbnails
-crates/antirustpaste-imaging/    pure-Rust image metadata and thumbnails
-```
-
-| Path | Purpose |
-| --- | --- |
-| `apps/antirustpaste-macos/src/main.rs` | Entry point |
-| `apps/antirustpaste-macos/src/app.rs` | App delegate, state, polling, popup/preferences actions |
-| `apps/antirustpaste-macos/src/views.rs` | Objective-C classes for the popup, list views, preferences |
-| `apps/antirustpaste-macos/src/pasteboard.rs` | Pasteboard reading and writing |
-| `apps/antirustpaste-macos/src/paste.rs` | Optional CoreGraphics ⌘V synthesis and Accessibility prompt |
-| `apps/antirustpaste-macos/src/hotkey.rs` | Carbon `RegisterEventHotKey` wrapper |
-| `apps/antirustpaste-macos/src/settings.rs` | User defaults, modifier migration, LaunchAgent |
-| `apps/antirustpaste-macos/src/thumbnails.rs` | Boot-cleared cache path and AppKit image loading |
-| `crates/antirustpaste-core` | `Clip`/`Store`, settings, filtering, shell-history reader, thumbnail worker |
-| `crates/antirustpaste-imaging` | Pure-Rust image metadata and thumbnail generation (`image` crate) |
-
-## Known gaps
-
-- The custom-drawn list has no per-row accessibility elements yet.
+- The custom list has no per-row accessibility elements yet.
 - The Images tab is a compact list, not a grid.
-- The first Images draw may show an `IMG` placeholder briefly while the
-  background worker generates the thumbnail.
-- EXIF orientation is not applied; a phone photo copied with an orientation tag
-  may be thumbnailed sideways.
-- File URLs that point at images stay in the Text tab; only bitmap pasteboard
-  data appears in Images.
-- zsh writes commands to `~/.zsh_history` on exit by default; without
-  `SHARE_HISTORY`/`INC_APPEND_HISTORY` the Commands tab updates only after that
-  shell exits. Use **Refresh** (`⌘R`) after the file changes.
+- EXIF orientation is not applied to thumbnails.
+- A first image draw may briefly show an `IMG` placeholder while the thumbnail
+  worker runs.
+- RTFD previews use their plain-text fallback; HTML previews are rendered by the
+  system panel, which may load referenced resources.
+- Quick Look → TextEdit editing depends on the system **Open with** button and
+  on TextEdit saving the temporary file. Edits above 1 MiB, empty edits and
+  duplicates are not imported.
+- File URLs that point at images stay in the Text tab.
+- zsh writes history on exit by default; without `SHARE_HISTORY` or
+  `INC_APPEND_HISTORY`, refresh the Commands tab after the shell exits.
 - Only the default `~/.zsh_history` and `~/.bash_history` are read; a custom
-  `$HISTFILE` or fish history is not discovered.
-- There is no **Clear Commands** button: delete individual command rows with ⌫.
-  **Clear All Clippings** keeps commands.
-- History is plain JSON plus blob files; it is not encrypted.
+  `$HISTFILE` and fish history are not discovered.
+- There is no **Clear Commands** action: delete command rows individually, or
+  use the MCP `delete_clip` tool.
 - Start at login uses a LaunchAgent, not `SMAppService`; moving the app requires
   relaunching it so the plist is rewritten.
-- Self-updates replace the app bundle in place. Because the bundle is ad-hoc
-  signed, macOS may ask for Accessibility approval again after an update when
-  automatic pasting is enabled; copy-only use needs no approval. A
-  Gatekeeper-translocated copy can only open the release page.
+- After a self-update, macOS may ask for Accessibility approval again when
+  automatic pasting is enabled.
 - A global shortcut already owned by another app must be re-recorded.
+- The Linux GTK4/X11 port is in the workspace but was not run on this host. It
+  lacks MCP control, scoped clears and the tray recording toggle. Windows has no
+  shell yet.
 
-## Notes
+## Documentation
 
-- Carbon's hot key API is deprecated for UI but is still the supported way to
-  register a system-wide shortcut without Accessibility access.
-- Automatic pasting needs Accessibility because AntiRustPaste sends a synthetic
-  ⌘V to the app that was frontmost when the popup opened. Copying never needs
-  it: the default behaviour only writes the pasteboard.
-- Panics in AppKit, timer and Carbon callbacks are caught and logged rather than
-  being allowed to abort the process.
-- Thumbnail decoding lives in a pure-Rust crate with `#![forbid(unsafe_code)]`,
-  so it can be tested and reused outside macOS. Its only new dependency is
-  `image` (MIT OR Apache-2.0); see [THIRD_PARTY.md](THIRD_PARTY.md).
-- One `antirustpaste-thumbnails` worker handles decode/cache I/O; AppKit stays on the
-  main thread.
-- The default macOS cache is under `/tmp`, which the OS clears at boot. An
-  explicit `ANTIRUSTPASTE_THUMB_CACHE_DIR` override is not boot-cleared.
-- This is an independent reimplementation: it shares no code, assets or wording
-  with CopyClip.
+| If you want to… | Read |
+| --- | --- |
+| Check exact behaviour and edge cases | [Behaviour](docs/behavior.md) |
+| Connect an MCP client | [MCP control](docs/mcp.md) |
+| See platform support | [Platforms](docs/platforms.md) |
+| Build, test or release | [Development](docs/development.md), [Testing](docs/testing.md), [Releasing](docs/releasing.md) |
+| Understand the design | [Architecture](docs/architecture.md), [Decisions](docs/decisions.md) |
+| See what comes next | [Roadmap](ROADMAP.md) |
+
+AntiRustPaste is an independent implementation: all code, assets and wording are
+our own. Contributors and AI agents should start from
+[docs/development.md](docs/development.md) and [AGENTS.md](AGENTS.md).

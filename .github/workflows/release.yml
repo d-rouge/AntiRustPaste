@@ -93,9 +93,13 @@ jobs:
             exit 1
           fi
           archs="$(lipo -archs dist/AntiRustPaste.app/Contents/MacOS/AntiRustPaste)"
-          echo "Architectures: $archs"
+          echo "App architectures: $archs"
           echo "$archs" | grep -q arm64
           echo "$archs" | grep -q x86_64
+          mcp_archs="$(lipo -archs dist/AntiRustPaste.app/Contents/MacOS/antirustpaste-mcp)"
+          echo "MCP architectures: $mcp_archs"
+          echo "$mcp_archs" | grep -q arm64
+          echo "$mcp_archs" | grep -q x86_64
 
       - name: Package zip, dmg and checksums
         env:

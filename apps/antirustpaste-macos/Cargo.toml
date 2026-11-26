@@ -1,9 +1,9 @@
 [package]
 name = "antirustpaste"
-version = "0.3.3"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.88"
-description = "A pure-Rust clipboard history manager for macOS, inspired by CopyClip"
+description = "A pure-Rust clipboard history manager for macOS"
 publish = false
 
 [dependencies]
@@ -15,6 +15,7 @@ objc2-foundation = "0.3.2"
 objc2-quartz-core = { version = "0.3.2", features = ["CALayer"] }
 objc2-quick-look-ui = { version = "0.3.2", default-features = false, features = ["QLPreviewPanel", "QLPreviewItem", "objc2-app-kit"] }
 antirustpaste-core = { path = "../../crates/antirustpaste-core" }
+antirustpaste-control = { path = "../../crates/antirustpaste-control" }
 antirustpaste-imaging = { path = "../../crates/antirustpaste-imaging" }
 antirustpaste-pdf = { path = "../../crates/antirustpaste-pdf" }
 serde_json = "1.0.154"

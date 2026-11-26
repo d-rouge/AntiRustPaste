@@ -106,18 +106,22 @@ the global menu bar.
 
 ## ADR-007: Test isolation through environment variables
 
-**Decision.** `ANTIRUSTPASTE_DATA_DIR`, `ANTIRUSTPASTE_DEFAULTS_SUITE` and
-`ANTIRUSTPASTE_LAUNCH_AGENT_DIR` redirect history, preferences and the login item.
+**Decision.** `ANTIRUSTPASTE_DATA_DIR`, `ANTIRUSTPASTE_CONTROL_SOCKET`,
+`ANTIRUSTPASTE_DEFAULTS_SUITE`, `ANTIRUSTPASTE_LAUNCH_AGENT_DIR`,
+`ANTIRUSTPASTE_THUMB_CACHE_DIR` and `ANTIRUSTPASTE_SHELL_HISTORY_DIR` redirect
+history, the MCP socket, preferences, the login item, the thumbnail/Quick Look
+cache and shell history.
 
 **Why.** GUI tests otherwise read or destroy the operator's private history and
 change their next login. The overrides are small, explicit and inert when unset;
-they also make the smoke test safe.
+they also make the smoke test and isolated MCP checks safe.
 
 **Alternatives.** A `--test-mode` flag (easy to ship accidentally), a separate
 binary (duplicated wiring), a temporary macOS user (heavy).
 
-**Trade-off.** Production code contains three environment checks. They are
-documented in `--help`, `README.md` and `docs/development.md`.
+**Trade-off.** Production code contains these environment checks. They are
+documented in `--help`, `README.md`, `docs/development.md` and
+[`mcp.md`](mcp.md).
 
 ## ADR-008: Panic guards at every OS boundary
 
@@ -180,7 +184,11 @@ default on macOS, `/tmp/AntiRustPaste-<user>-<hash>/thumbnails`, never in
 out of the history avoids schema changes, keeps saves small, and makes clearing
 safe. macOS clears `/tmp` at boot, which gives the operator the requested
 guarantee that no previews survive a reboot. The per-user subdirectory and
-`0700`/`0600` permissions keep clipboard images private. A legacy cache under
+`0700`/`0600` permissions keep clipboard images private. Quick Look preview
+files reuse this directory, so temporary text and rich-text copies get the same
+private lifetime. Editable text previews may outlive a single Quick Look session
+because TextEdit can still hold the file; they stay in the same boot-cleared
+directory and at most eight are watched. A legacy cache under
 `<OS temp>/AntiRustPaste/thumbnails` is removed once at startup.
 
 **Alternatives.** A durable cache under `~/Library/Caches` (survives more, but
@@ -214,8 +222,11 @@ placeholder. The worker must never touch AppKit or `AppState`.
 ## ADR-013: Workspace with a platform-neutral core and native shells
 
 **Decision.** Keep domain code in `crates/antirustpaste-core`, the image codec in
-`crates/antirustpaste-imaging`, and the implemented UI in `apps/antirustpaste-macos`.
-Future platforms add `apps/antirustpaste-<os>` beside it.
+`crates/antirustpaste-imaging`, the PDF writer in `crates/antirustpaste-pdf`, and
+the primary UI in `apps/antirustpaste-macos`. A Linux GTK4/X11 shell lives in
+`apps/antirustpaste-linux`; future platforms add `apps/antirustpaste-<os>` beside
+it. The local control protocol and MCP bridge are separate crates because they
+are not UI code.
 
 **Why.** The clipboard model, storage, settings schema, filtering and thumbnail
 worker are identical on every OS and easy to test without a display. Tray icons,
@@ -224,20 +235,22 @@ inherently platform-specific and behave better natively than behind a
 cross-platform abstraction.
 
 **Alternatives.** One `egui`/`tray-icon` shell for all platforms (less native
-UX, Linux/Wayland caveats), Tauri (web UI), a trait-heavy platform API before a
-second implementation exists.
+UX, Linux/Wayland caveats), Tauri (web UI), a trait-heavy platform API before
+both shells stabilise.
 
 **Trade-off.** Each OS needs a shell, but core changes remain shared and the
 macOS UX is not compromised. There is deliberately no `Platform` trait yet: the
-second shell will reveal the right interface. See
+Linux shell is still unverified against the full macOS contract, and a trait
+before both shells stabilise would leak the wrong abstraction. See
 [platforms.md](platforms.md).
 
 ## ADR-014: Native macOS clipboard, portable backend for future shells
 
-**Decision.** The macOS shell keeps `NSPasteboard` + `changeCount` polling.
-Windows/Linux shells choose their own adapter; prefer `clipboard-rs` if the full
-text/HTML/RTF/image/file matrix is needed, otherwise `arboard` +
-`clipboard-master` is acceptable for text/images.
+**Decision.** The macOS shell keeps `NSPasteboard` + `changeCount` polling. The
+Linux GTK4 shell uses the GDK clipboard because the UI toolkit already owns the
+selection and change notification. A future Windows shell chooses its own
+adapter; prefer `clipboard-rs` if the full text/HTML/RTF/image/file matrix is
+needed, otherwise `arboard` + `clipboard-master` is acceptable for text/images.
 
 **Why.** `NSPasteboard` exposes exact UTIs, RTF/RTFD, HTML, file URLs,
 concealed/transient types and original encoded bytes. `arboard` exposes text,
@@ -253,15 +266,17 @@ dependency. Platform shells own permissions and native formats.
 
 **Decision.** Add `pinned: bool` to `antirustpaste_core::Clip`, keep pinned clips at
 the front of the vector, and make `trim` count/remove only unpinned clips. Use
-`⌘P` plus a row glyph in the macOS shell; a row context menu is a follow-up.
+`⌘P` plus a right-side row marker in the macOS shell; a row context menu is a
+follow-up. The marker and pinned-card tint are appearance settings stored in the
+platform shell, not part of the core clip model.
 
 **Why.** Pinning changes ordering and eviction, not capture or rendering, so it
 belongs in the platform-neutral store and every shell must apply the same rules.
 The field is additive with `#[serde(default)]`, so old histories need no
 migration. A pinned duplicate content hash keeps its pinned flag and moves to
-the top of the pinned group. Explicit delete, section clear and Clear All
-Clippings still remove pinned clippings; pinning protects only against automatic
-eviction. Shell commands are kept by Clear All Clippings.
+the top of the pinned group. Explicit delete and the non-unpinned clear actions
+still remove pinned clippings; **Clear Unpinned** leaves them. Pinning protects
+only against automatic eviction. Every clipping clear keeps shell commands.
 
 **Trade-off.** The history can exceed the configured maximum when many clips are
 pinned. This is intentional and visible in the row count; the alternative
@@ -315,4 +330,74 @@ for text).
 tab is refreshed. Commands and clippings share one index, so an older build that
 does not know the `command` kind would quarantine the index as `.bak` instead of
 reading it; the current reader still accepts every older record. The configured
-limit applies per section, and `Clear All Clippings` leaves commands alone.
+limit applies per section, and every clipping clear keeps commands.
+
+## ADR-018: Pinned default palette uses warm yellow with a deep-violet marker
+
+**Decision.** The pinned card uses `#FAE637` as a low-opacity tint over the
+normal card surface; the filled marker uses `#5E35B1`. Both are configurable in
+Preferences, with a **Restore Defaults** action.
+
+**Why.** The marker is a binary state indicator, and the filled-versus-hollow
+shape already carries the state, so colour is redundant rather than the only
+signal. The default should still be legible: the WCAG non-text contrast target
+is 3:1, and `#5E35B1` is about 6.7:1 against the rendered pale-yellow card. The
+hue is complementary to the warm yellow, which makes a small dot read clearly
+without vibrating. It is also distinct from the system-blue selection and avoids
+the recording/error association of red. Blue was rejected because the selected
+row already owns it; green commonly means success or active; a neutral charcoal
+would work but adds no character.
+
+**Alternatives.** Deep red `#C62828` (about 4.7:1) keeps the red preference but
+still reads as a recording indicator. Teal `#00695C` (about 5.5:1) is a
+split-complementary option but can read as an active state. Charcoal `#212121`
+(about 13.4:1) is the safest neutral, at the cost of a colour accent.
+Monochromatic dark amber is harmonious but has weak hue separation from the
+card.
+
+**Trade-off.** The pair is more expressive than a neutral dot, and the card tint
+is intentionally shown at low opacity, so the colour well displays a more
+saturated yellow than the final card. Both values remain user settings, and
+**Restore Defaults** makes the choice reversible.
+
+## ADR-019: Clip titles are additive metadata and row-menu actions use clip ids
+
+**Decision.** Store an optional `title: Option<String>` on `antirustpaste_core::Clip`
+with `#[serde(default)]`. Normalise it in core with one bounded helper
+(whitespace collapsed, control characters removed, 160-character cap). The row
+context menu puts the clip id in each item's `representedObject` and re-resolves
+the clip after menu tracking returns rather than storing a row index.
+
+**Why.** Existing history JSON keeps loading unchanged, and the title is metadata
+like `pinned`, so deduplication and the content hash stay untouched. A menu runs
+a nested event loop and the pasteboard poll can reorder the history while it is
+open; a clip id survives that, while a filtered or store index would not. The id
+also lets the menu act on the row under the pointer without changing the current
+selection.
+
+**Trade-off.** A title is stored in the same plaintext JSON as the clip text, so
+it has the same privacy properties (no encryption yet). Title editing is
+deliberately unavailable for shell commands, whose text comes from their history
+file.
+
+## ADR-020: MCP uses a private local socket serviced by the existing timer
+
+**Decision.** Keep the app as the only writer and expose control through a Unix
+domain socket in the history directory. A separate `antirustpaste-mcp` binary
+translates MCP stdio JSON-RPC into the local JSON-line protocol. The app accepts,
+reads and writes non-blocking connections from the existing 0.1 s main-thread
+timer. The socket is mode `0600`; there is no TCP listener. The MCP bridge is
+copied and signed inside the app bundle by `make-app.sh`.
+
+**Why.** Reading the JSON index directly from the MCP process would race the
+running app and could show stale data after a delete or pin. AppleScript/UI
+automation would be incomplete and fragile. A local socket lets every tool reuse
+the same `with_state` actions as the menus and keyboard, so storage, clipboard,
+Quick Look and preferences stay consistent. Using the existing timer avoids a
+second thread and keeps all AppKit work on the main thread.
+
+**Trade-off.** Any process running as the same user can connect to the socket and
+read the same clipboard history it could already read from the history files.
+MCP clients must therefore be trusted like local processes. Requests and
+responses are bounded, content is never logged, and the socket is removed on a
+normal quit. A stale path is only replaced when it is actually a Unix socket.

@@ -86,6 +86,40 @@ pub fn reset_previews() {
     let _ = fs::remove_dir_all(preview_dir());
 }
 
+/// Disk footprint of the disposable cache, including Quick Look previews.
+/// Directory reads are bounded and symlinks are never followed.
+pub fn cache_usage_bytes() -> u64 {
+    directory_usage_bytes(&cache_dir(), 0)
+}
+
+fn directory_usage_bytes(dir: &Path, depth: usize) -> u64 {
+    const MAX_DEPTH: usize = 4;
+    const MAX_ENTRIES: usize = 10_000;
+
+    if depth > MAX_DEPTH {
+        return 0;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for (index, entry) in entries.flatten().enumerate() {
+        if index >= MAX_ENTRIES {
+            break;
+        }
+        let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        let file_type = meta.file_type();
+        if file_type.is_file() {
+            total = total.saturating_add(meta.len());
+        } else if file_type.is_dir() {
+            total = total.saturating_add(directory_usage_bytes(&entry.path(), depth + 1));
+        }
+    }
+    total
+}
+
 pub fn ensure_preview_dir() -> std::io::Result<PathBuf> {
     let dir = preview_dir();
     fs::create_dir_all(&dir)?;
@@ -206,5 +240,19 @@ mod tests {
             key.chars()
                 .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
         );
+    }
+
+    #[test]
+    fn cache_usage_sums_files_and_preview_subdirectories() {
+        let dir =
+            std::env::temp_dir().join(format!("antirustpaste-cache-usage-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("previews")).expect("cache directories");
+        fs::write(dir.join("thumb-1.png"), b"1234").expect("thumbnail");
+        fs::write(dir.join("previews").join("preview-1.txt"), b"123456").expect("preview");
+
+        assert_eq!(directory_usage_bytes(&dir, 0), 10);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -6,8 +6,9 @@ signing keys or repository secrets are required: the workflow uses the built-in
 
 ## Cut a release
 
-1. Bump the version in `apps/antirustpaste-macos/Cargo.toml` (and keep `Cargo.lock`
-   in sync by building once). The tag must match this version exactly.
+1. Bump the version in `apps/antirustpaste-macos/Cargo.toml` and
+   `apps/antirustpaste-linux/Cargo.toml` (and keep `Cargo.lock` in sync by
+   building once). The tag must match the macOS version exactly.
 2. Run the checks locally: `./scripts/check.sh`.
 3. Commit and push the bump to `main`.
 4. Create and push an annotated tag:
@@ -23,7 +24,8 @@ signing keys or repository secrets are required: the workflow uses the built-in
      does not match `apps/antirustpaste-macos/Cargo.toml`.
    - **Build universal app** — installs Rust, runs `./scripts/check.sh`, builds
      with `ANTIRUSTPASTE_UNIVERSAL=1 ./make-app.sh`, verifies the bundle version and
-     that the binary contains both `arm64` and `x86_64`, then packages
+     that both `AntiRustPaste` and `antirustpaste-mcp` contain `arm64` and
+     `x86_64`, then packages
      `AntiRustPaste-<version>-universal.zip`, `AntiRustPaste-<version>-universal.dmg` and
      `SHA256SUMS.txt`. The disk image is built by `scripts/make-dmg.sh`, which
      lays the app and the Applications shortcut over `assets/dmg/background.png`
@@ -55,7 +57,8 @@ update will be refused.
 ```sh
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 ANTIRUSTPASTE_UNIVERSAL=1 ./make-app.sh
-lipo -archs dist/AntiRustPaste.app/Contents/MacOS/antirustpaste
+lipo -archs dist/AntiRustPaste.app/Contents/MacOS/AntiRustPaste
+lipo -archs dist/AntiRustPaste.app/Contents/MacOS/antirustpaste-mcp
 ```
 
 ## Signing and first launch

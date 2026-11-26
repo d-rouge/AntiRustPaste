@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::ptr::{NonNull, null_mut};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use block2::RcBlock;
 use objc2::AnyThread;
@@ -25,9 +25,10 @@ use crate::hotkey::{self, Hotkey};
 use crate::paste;
 use crate::pasteboard;
 use antirustpaste_core::{
-    Clip, ClipKind, IgnoredApp, MAX_LIMIT, Section, Settings, Shell, ShellFile, Store,
-    ThumbnailService, filter_indices as core_filter_indices, load_cursors, now_ms, read_new,
-    save_cursors,
+    ClearScope, Clip, ClipKind, DEFAULT_PINNED_BACKGROUND, DEFAULT_PINNED_INDICATOR, EditTextError,
+    IgnoredApp, MAX_EDIT_TEXT_BYTES, MAX_LIMIT, Section, Settings, Shell, ShellFile, Store,
+    ThumbnailService, filter_indices as core_filter_indices, human_size, load_cursors, now_ms,
+    read_new, save_cursors,
 };
 use antirustpaste_pdf::PdfImage;
 
@@ -36,6 +37,8 @@ use crate::thumbnails;
 use crate::update;
 use crate::views::{self, ClipListView, ClipPanel, PanelDelegate, PdfExportParts, PrefsParts};
 
+mod control;
+
 pub(crate) const PANEL_W: f64 = 460.0;
 pub(crate) const PANEL_H: f64 = 480.0;
 pub(crate) const ROW_H: f64 = 54.0;
@@ -43,6 +46,8 @@ pub(crate) const LIST_HEADER_H: f64 = 26.0;
 const LIST_BOTTOM_PAD: f64 = 4.0;
 pub(crate) const LIST_BOTTOM: f64 = 32.0;
 pub(crate) const SEARCH_H: f64 = 40.0;
+/// Dwell time before the hover callout appears.
+const HOVER_PREVIEW_DELAY: f64 = 0.6;
 
 /// Vertical layout of the history list: a **PINNED** header and card for the
 /// pinned group, a **RECENT** header, then the unpinned rows. Headers are only
@@ -175,6 +180,7 @@ pub(crate) fn list_layout(s: &AppState, indices: &[usize]) -> ListLayout {
     ListLayout::new(pinned, indices.len())
 }
 const MAX_IN_MEMORY_THUMBNAILS: usize = 256;
+const MAX_APP_ICONS: usize = 64;
 const STATUS_ICON_PNG: &[u8] = include_bytes!("../../../assets/status-icon.png");
 
 // NSEventModifierFlags values used only for local key handling and recording.
@@ -235,6 +241,19 @@ pub(crate) struct PdfExportState {
     pub selected: HashSet<String>,
 }
 
+/// A temporary text preview that Quick Look may hand to TextEdit. The app polls
+/// the file and imports saved changes back into the clip.
+pub(crate) struct WatchedTextPreview {
+    pub path: PathBuf,
+    pub clip_id: String,
+    pub modified: Option<SystemTime>,
+    pub len: u64,
+}
+
+/// Bound on simultaneously watched text previews. Older files are removed when
+/// the list grows past this, so an editing session cannot fill `/tmp`.
+const MAX_WATCHED_TEXT_PREVIEWS: usize = 8;
+
 pub(crate) struct AppState {
     pub store: Store,
     pub settings: Settings,
@@ -245,14 +264,22 @@ pub(crate) struct AppState {
     pub list: Retained<ClipListView>,
     pub footer: Retained<NSTextField>,
     pub section_control: Retained<NSSegmentedControl>,
-    pub clear_text_button: Retained<NSButton>,
-    pub clear_images_button: Retained<NSButton>,
+    pub clear_all_button: Retained<NSButton>,
+    pub clear_unpinned_button: Retained<NSButton>,
     pub export_pdf_button: Retained<NSButton>,
     pub refresh_commands_button: Retained<NSButton>,
-    pub pin_outline: Option<Retained<NSImage>>,
-    pub pin_filled: Option<Retained<NSImage>>,
-    pub pin_outline_selected: Option<Retained<NSImage>>,
-    pub pin_filled_selected: Option<Retained<NSImage>>,
+    /// Status-menu item that pauses and resumes capture; kept in sync with the
+    /// Preferences checkbox.
+    pub recording_menu_item: Retained<NSMenuItem>,
+    /// SF Symbol pencil for the Edited badge, in normal and emphasised states.
+    pub title_symbol: Option<Retained<NSImage>>,
+    pub title_symbol_selected: Option<Retained<NSImage>>,
+    /// Floating callout shown while the pointer rests on a row.
+    pub hover_preview: Option<views::HoverPreviewParts>,
+    pub hover_preview_target: Option<String>,
+    pub hover_preview_token: u64,
+    /// Source-app icons keyed by bundle identifier; `None` means lookup failed.
+    pub app_icons: HashMap<String, Option<Retained<NSImage>>>,
     pub section: ClipboardSection,
     pub thumbnails: HashMap<u64, Retained<NSImage>>,
     pub thumbnail_failed: HashSet<u64>,
@@ -262,10 +289,15 @@ pub(crate) struct AppState {
     pub panel_delegate: Retained<PanelDelegate>,
     pub prefs: Option<PrefsParts>,
     pub pdf_export: Option<PdfExportState>,
+    /// Local JSON control socket used by the MCP bridge.
+    pub control: Option<control::ControlServer>,
     /// File URL handed to the shared Quick Look panel; `None` when it is closed.
     pub preview_item: Option<Retained<NSURL>>,
-    /// Full-size image written for Quick Look; deleted when the preview closes.
+    /// Temporary preview file written for Quick Look; deleted when it closes,
+    /// unless it is a watched text file that an external editor may still hold.
     pub preview_file: Option<PathBuf>,
+    /// Text previews whose temporary file is watched for edits made in TextEdit.
+    pub text_previews: Vec<WatchedTextPreview>,
     pub selected: usize,
     pub scroll: f64,
     pub query: String,
@@ -282,6 +314,9 @@ pub(crate) struct AppState {
     pub pending_show: bool,
     /// Invalidates a scheduled hide when the status item itself was clicked.
     pub hide_token: u64,
+    /// True while a row context menu is being tracked. The panel must not hide
+    /// on a temporary key-window change caused by the menu.
+    pub context_menu_open: bool,
     pub accessibility_asked: bool,
 }
 
@@ -375,15 +410,8 @@ pub(crate) fn filtered_indices(s: &AppState) -> Vec<usize> {
     core_filter_indices(&s.store.clips, s.section, &s.query)
 }
 
-pub(crate) fn section_matches(section: ClipboardSection, clip: &Clip) -> bool {
-    match section {
-        ClipboardSection::Text => clip.kind != ClipKind::Image && clip.kind != ClipKind::Command,
-        ClipboardSection::Images => clip.kind == ClipKind::Image,
-        ClipboardSection::Commands => clip.kind == ClipKind::Command,
-    }
-}
-
 fn set_section(section: ClipboardSection) {
+    hide_hover_preview();
     let changed = with_state(|s| {
         let changed = s.section != section;
         s.section = section;
@@ -426,21 +454,33 @@ fn update_footer(s: &AppState) {
     );
     s.refresh_commands_button
         .setHidden(s.section != ClipboardSection::Commands);
-    s.clear_text_button.setEnabled(
-        s.store
-            .clips
-            .iter()
-            .any(|clip| section_matches(ClipboardSection::Text, clip)),
-    );
-    s.clear_images_button.setEnabled(
-        s.store
-            .clips
-            .iter()
-            .any(|clip| section_matches(ClipboardSection::Images, clip)),
-    );
+    let (clear_all_count, clear_unpinned_count) = match s.section {
+        ClipboardSection::Text => (
+            s.store.count_scope(ClearScope::Text),
+            s.store.count_scope(ClearScope::UnpinnedText),
+        ),
+        ClipboardSection::Images => (
+            s.store.count_scope(ClearScope::Images),
+            s.store.count_scope(ClearScope::UnpinnedImages),
+        ),
+        ClipboardSection::Commands => (0, 0),
+    };
+    let clear_hidden = s.section == ClipboardSection::Commands;
+    s.clear_all_button.setHidden(clear_hidden);
+    s.clear_unpinned_button.setHidden(clear_hidden);
+    s.clear_all_button.setEnabled(clear_all_count > 0);
+    s.clear_unpinned_button.setEnabled(clear_unpinned_count > 0);
 }
 
 fn refresh_ui() {
+    let stale_preview = with_state(|s| {
+        s.hover_preview_target
+            .as_deref()
+            .is_some_and(|id| !s.store.clips.iter().any(|clip| clip.id == id))
+    });
+    if stale_preview {
+        hide_hover_preview();
+    }
     with_state(|s| {
         let indices = filtered_indices(s);
         let layout = list_layout(s, &indices);
@@ -454,6 +494,14 @@ fn refresh_ui() {
         update_footer(s);
         s.list.setNeedsDisplay(true);
     });
+    update_history_controls();
+    if with_state(|s| {
+        s.prefs
+            .as_ref()
+            .is_some_and(|prefs| prefs.window.isVisible())
+    }) {
+        update_history_storage();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -488,6 +536,8 @@ define_class!(
         #[unsafe(method(applicationWillTerminate:))]
         fn application_will_terminate(&self, _notification: &NSNotification) {
             guard("application_will_terminate", || {
+                let control = with_state(|s| s.control.take());
+                drop(control);
                 if let Some(preview) = preview_panel() {
                     preview.orderOut(None);
                 }
@@ -594,24 +644,57 @@ define_class!(
             guard("clear_thumbnail_cache", clear_thumbnail_cache);
         }
 
-        #[unsafe(method(clearHistory:))]
-        fn clear_history(&self, _sender: &AnyObject) {
-            guard("clear_history", || {
-                clear_all();
+        #[unsafe(method(toggleRecording:))]
+        fn toggle_recording(&self, _sender: &AnyObject) {
+            guard("toggle_recording", toggle_recording_setting);
+        }
+
+        #[unsafe(method(clearCurrentSection:))]
+        fn clear_current_section(&self, _sender: &AnyObject) {
+            guard("clear_current_section", || {
+                clear_current_scope(false);
             });
         }
 
-        #[unsafe(method(clearTextSection:))]
-        fn clear_text_section(&self, _sender: &AnyObject) {
-            guard("clear_text_section", || {
-                clear_section(ClipboardSection::Text);
+        #[unsafe(method(clearCurrentUnpinned:))]
+        fn clear_current_unpinned(&self, _sender: &AnyObject) {
+            guard("clear_current_unpinned", || {
+                clear_current_scope(true);
             });
         }
 
-        #[unsafe(method(clearImagesSection:))]
-        fn clear_images_section(&self, _sender: &AnyObject) {
-            guard("clear_images_section", || {
-                clear_section(ClipboardSection::Images);
+        #[unsafe(method(deleteAllClippings:))]
+        fn delete_all_clippings(&self, _sender: &AnyObject) {
+            guard("delete_all_clippings", || {
+                clear_scope(ClearScope::Everything);
+            });
+        }
+
+        #[unsafe(method(deleteAllImages:))]
+        fn delete_all_images(&self, _sender: &AnyObject) {
+            guard("delete_all_images", || {
+                clear_scope(ClearScope::Images);
+            });
+        }
+
+        #[unsafe(method(deleteAllText:))]
+        fn delete_all_text(&self, _sender: &AnyObject) {
+            guard("delete_all_text", || {
+                clear_scope(ClearScope::Text);
+            });
+        }
+
+        #[unsafe(method(deleteUnpinnedText:))]
+        fn delete_unpinned_text(&self, _sender: &AnyObject) {
+            guard("delete_unpinned_text", || {
+                clear_scope(ClearScope::UnpinnedText);
+            });
+        }
+
+        #[unsafe(method(deleteUnpinnedImages:))]
+        fn delete_unpinned_images(&self, _sender: &AnyObject) {
+            guard("delete_unpinned_images", || {
+                clear_scope(ClearScope::UnpinnedImages);
             });
         }
 
@@ -680,15 +763,7 @@ define_class!(
         fn record_toggled(&self, sender: &NSButton) {
             guard("record_toggled", || {
                 let on = sender.state() == NSControlStateValueOn;
-                with_state(|s| {
-                    s.settings.record = on;
-                    settings::save(&s.settings);
-                });
-                if on {
-                    let pb = pasteboard::general();
-                    let count = pb.changeCount();
-                    with_state(|s| s.last_change_count = count);
-                }
+                set_recording(on);
             });
         }
 
@@ -711,6 +786,27 @@ define_class!(
                     s.settings.paste_after_select = on;
                     settings::save(&s.settings);
                 });
+            });
+        }
+
+        #[unsafe(method(pinnedBackgroundChanged:))]
+        fn pinned_background_changed(&self, sender: &NSColorWell) {
+            guard("pinned_background_changed", || {
+                set_pinned_color(sender, true);
+            });
+        }
+
+        #[unsafe(method(pinnedIndicatorChanged:))]
+        fn pinned_indicator_changed(&self, sender: &NSColorWell) {
+            guard("pinned_indicator_changed", || {
+                set_pinned_color(sender, false);
+            });
+        }
+
+        #[unsafe(method(restorePinnedColors:))]
+        fn restore_pinned_colors(&self, _sender: &AnyObject) {
+            guard("restore_pinned_colors", || {
+                reset_pinned_colors();
             });
         }
 
@@ -762,6 +858,78 @@ define_class!(
             });
         }
 
+        #[unsafe(method(rowMenuPin:))]
+        fn row_menu_pin(&self, sender: &NSMenuItem) {
+            guard("row_menu_pin", || {
+                if let Some(id) = menu_clip_id(sender) {
+                    toggle_pin_by_id(&id);
+                }
+            });
+        }
+
+        #[unsafe(method(rowMenuCopy:))]
+        fn row_menu_copy(&self, sender: &NSMenuItem) {
+            guard("row_menu_copy", || {
+                if let Some(id) = menu_clip_id(sender) {
+                    paste_clip_by_id(&id, false);
+                }
+            });
+        }
+
+        #[unsafe(method(rowMenuCopyPlain:))]
+        fn row_menu_copy_plain(&self, sender: &NSMenuItem) {
+            guard("row_menu_copy_plain", || {
+                if let Some(id) = menu_clip_id(sender) {
+                    copy_clip_plain_by_id(&id);
+                }
+            });
+        }
+
+        #[unsafe(method(rowMenuPaste:))]
+        fn row_menu_paste(&self, sender: &NSMenuItem) {
+            guard("row_menu_paste", || {
+                if let Some(id) = menu_clip_id(sender) {
+                    paste_clip_by_id(&id, auto_paste());
+                }
+            });
+        }
+
+        #[unsafe(method(rowMenuEdit:))]
+        fn row_menu_edit(&self, sender: &NSMenuItem) {
+            guard("row_menu_edit", || {
+                if let Some(id) = menu_clip_id(sender) {
+                    edit_clip(&id);
+                }
+            });
+        }
+
+        #[unsafe(method(rowMenuRename:))]
+        fn row_menu_rename(&self, sender: &NSMenuItem) {
+            guard("row_menu_rename", || {
+                if let Some(id) = menu_clip_id(sender) {
+                    rename_clip(&id);
+                }
+            });
+        }
+
+        #[unsafe(method(rowMenuDelete:))]
+        fn row_menu_delete(&self, sender: &NSMenuItem) {
+            guard("row_menu_delete", || {
+                if let Some(id) = menu_clip_id(sender) {
+                    delete_clip(&id);
+                }
+            });
+        }
+
+        #[unsafe(method(rowMenuQuickLook:))]
+        fn row_menu_quick_look(&self, sender: &NSMenuItem) {
+            guard("row_menu_quick_look", || {
+                if let Some(id) = menu_clip_id(sender) {
+                    toggle_preview_for_clip(&id);
+                }
+            });
+        }
+
     }
 
     unsafe impl QLPreviewPanelDataSource for AppDelegate {
@@ -808,7 +976,7 @@ define_class!(
                     return false;
                 }
                 if event.keyCode() == 49 || event.keyCode() == 53 {
-                    close_image_preview();
+                    close_quick_look();
                     return true;
                 }
                 false
@@ -879,12 +1047,13 @@ fn setup_app() {
         }
     }
 
-    let menu = build_status_menu(mtm);
+    let (menu, recording_menu_item) = build_status_menu(mtm);
     let parts = views::build_panel(mtm, &delegate_ref());
     let panel_delegate = PanelDelegate::create(mtm);
     parts
         .panel
         .setDelegate(Some(ProtocolObject::from_ref(&*panel_delegate)));
+    let control = control::ControlServer::start();
 
     let state = AppState {
         store,
@@ -896,14 +1065,17 @@ fn setup_app() {
         list: parts.list,
         footer: parts.footer,
         section_control: parts.section_control,
-        clear_text_button: parts.clear_text_button,
-        clear_images_button: parts.clear_images_button,
+        clear_all_button: parts.clear_all_button,
+        clear_unpinned_button: parts.clear_unpinned_button,
         export_pdf_button: parts.export_pdf_button,
         refresh_commands_button: parts.refresh_commands_button,
-        pin_outline: parts.pin_outline,
-        pin_filled: parts.pin_filled,
-        pin_outline_selected: parts.pin_outline_selected,
-        pin_filled_selected: parts.pin_filled_selected,
+        recording_menu_item,
+        title_symbol: parts.title_symbol,
+        title_symbol_selected: parts.title_symbol_selected,
+        hover_preview: None,
+        hover_preview_target: None,
+        hover_preview_token: 0,
+        app_icons: HashMap::new(),
         section: ClipboardSection::Text,
         thumbnails: HashMap::new(),
         thumbnail_failed: HashSet::new(),
@@ -911,8 +1083,10 @@ fn setup_app() {
         panel_delegate,
         prefs: None,
         pdf_export: None,
+        control,
         preview_item: None,
         preview_file: None,
+        text_previews: Vec::new(),
         selected: 0,
         scroll: 0.0,
         query: String::new(),
@@ -926,10 +1100,12 @@ fn setup_app() {
         panel_anchor: None,
         pending_show: false,
         hide_token: 0,
+        context_menu_open: false,
         accessibility_asked: false,
     };
     STATE.with(|slot| *slot.borrow_mut() = Some(state));
 
+    sync_recording_ui();
     install_key_monitor();
     install_poll_timer();
     install_thumbnail_timer();
@@ -977,10 +1153,30 @@ fn menu_item(
     item
 }
 
-fn build_status_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
+fn recording_menu_title(recording: bool) -> &'static str {
+    if recording {
+        "Pause Recording"
+    } else {
+        "Resume Recording"
+    }
+}
+
+fn build_status_menu(mtm: MainThreadMarker) -> (Retained<NSMenu>, Retained<NSMenuItem>) {
     let target = delegate_any();
     let menu = NSMenu::new(mtm);
     menu.setAutoenablesItems(false);
+
+    let recording_item = menu_item(
+        recording_menu_title(true),
+        sel!(toggleRecording:),
+        &target,
+        mtm,
+    );
+    // No checkmark: the title already says whether clicking will pause or
+    // resume, and a check next to "Pause Recording" reads as if pause were on.
+    recording_item.setState(NSControlStateValueOff);
+    menu.addItem(&recording_item);
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
 
     menu.addItem(&menu_item(
         "Preferences…",
@@ -991,12 +1187,6 @@ fn build_status_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
     menu.addItem(&menu_item(
         "Export Images to PDF…",
         sel!(exportImagesPdf:),
-        &target,
-        mtm,
-    ));
-    menu.addItem(&menu_item(
-        "Clear All Clippings",
-        sel!(clearHistory:),
         &target,
         mtm,
     ));
@@ -1020,7 +1210,47 @@ fn build_status_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
         mtm,
     ));
 
-    menu
+    (menu, recording_item)
+}
+
+/// Update the status-menu item and the Preferences checkbox from the single
+/// stored recording flag. The state borrow is dropped before any AppKit call.
+fn sync_recording_ui() {
+    let (recording, menu_item, record_box) = with_state(|s| {
+        (
+            s.settings.record,
+            s.recording_menu_item.clone(),
+            s.prefs.as_ref().map(|prefs| prefs.record_box.clone()),
+        )
+    });
+    menu_item.setTitle(&NSString::from_str(recording_menu_title(recording)));
+    if let Some(record_box) = record_box {
+        let value = if recording {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        };
+        record_box.setState(value);
+    }
+}
+
+fn set_recording(recording: bool) {
+    with_state(|s| {
+        s.settings.record = recording;
+        settings::save(&s.settings);
+    });
+    if recording {
+        // Resume from the pasteboard as it is now: a change made while paused
+        // must not be captured on the next poll.
+        let count = pasteboard::general().changeCount();
+        with_state(|s| s.last_change_count = count);
+    }
+    sync_recording_ui();
+}
+
+fn toggle_recording_setting() {
+    let recording = with_state(|s| s.settings.record);
+    set_recording(!recording);
 }
 
 fn install_poll_timer() {
@@ -1035,6 +1265,7 @@ fn install_poll_timer() {
 fn install_thumbnail_timer() {
     let block = RcBlock::new(|_timer: NonNull<NSTimer>| {
         guard("thumbnail_results", drain_thumbnail_results);
+        guard("control_poll", control::poll);
     });
     unsafe {
         NSTimer::scheduledTimerWithTimeInterval_repeats_block(0.1, true, &block);
@@ -1077,6 +1308,7 @@ fn update_frontmost_app() {
 
 fn poll_pasteboard() {
     finish_closed_preview();
+    poll_edited_text_previews();
     let pb = pasteboard::general();
     let current = pb.changeCount();
     update_frontmost_app();
@@ -1216,7 +1448,7 @@ fn refresh_shell_history() {
 /// A click outside the popup makes it resign key. Delay the hide briefly so a
 /// click on the status item can cancel it and toggle the popup instead.
 pub(crate) fn schedule_hide_from_resign() {
-    if preview_is_open() {
+    if preview_is_open() || with_state(|s| s.context_menu_open) {
         return;
     }
     let token = with_state(|s| {
@@ -1243,6 +1475,7 @@ pub(crate) fn hide_panel() {
         s.hide_token = s.hide_token.wrapping_add(1);
         s.panel.clone()
     });
+    hide_hover_preview();
     panel.orderOut(None);
     if with_state(|s| s.preview_item.is_some()) {
         if let Some(preview) = preview_panel() {
@@ -1320,6 +1553,7 @@ fn resolve_target_app() -> Option<Retained<NSRunningApplication>> {
 }
 
 fn show_panel() {
+    hide_hover_preview();
     capture_target_app();
 
     let search = with_state(|s| {
@@ -1368,6 +1602,7 @@ fn present_panel() {
 }
 
 pub(crate) fn handle_list_click(view: &ClipListView, event: &NSEvent) {
+    hide_hover_preview();
     let point = view.convertPoint_fromView(event.locationInWindow(), None);
     let width = view.bounds().size.width;
     let (scroll, layout) = with_state(|s| {
@@ -1384,6 +1619,143 @@ pub(crate) fn handle_list_click(view: &ClipListView, event: &NSEvent) {
     } else {
         paste_filtered(row, auto_paste());
     }
+}
+
+pub(crate) fn handle_list_right_click(view: &ClipListView, event: &NSEvent) {
+    hide_hover_preview();
+    let point = view.convertPoint_fromView(event.locationInWindow(), None);
+    let Some(clip) = with_state(|s| {
+        let indices = filtered_indices(s);
+        let layout = list_layout(s, &indices);
+        let row = layout.row_at(point.y + s.scroll)?;
+        let index = *indices.get(row)?;
+        s.store.clips.get(index).cloned()
+    }) else {
+        return;
+    };
+
+    let mtm = main_thread();
+    let target = delegate_any();
+    let menu = NSMenu::new(mtm);
+    menu.setAutoenablesItems(false);
+
+    let pin_title = if clip.pinned { "Unpin" } else { "Pin" };
+    let pin_item = context_menu_item(pin_title, sel!(rowMenuPin:), &clip.id, &target, mtm);
+    set_menu_shortcut(&pin_item, "p", NSEventModifierFlags::Command);
+    menu.addItem(&pin_item);
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+
+    let copy_item = context_menu_item("Copy", sel!(rowMenuCopy:), &clip.id, &target, mtm);
+    set_menu_shortcut(&copy_item, "c", NSEventModifierFlags::Command);
+    menu.addItem(&copy_item);
+
+    // Only rich clips carry a plain-text fallback, so the item would be
+    // meaningless for text, file, image and command rows.
+    if clip.plain_text().is_some() {
+        let plain_item = context_menu_item(
+            "Copy as Plain Text",
+            sel!(rowMenuCopyPlain:),
+            &clip.id,
+            &target,
+            mtm,
+        );
+        menu.addItem(&plain_item);
+    }
+
+    // "Paste" only makes sense when choosing a row also synthesises ⌘V. With
+    // the preference off it would do exactly what "Copy" does.
+    if auto_paste() {
+        let paste_item = context_menu_item("Paste", sel!(rowMenuPaste:), &clip.id, &target, mtm);
+        set_menu_shortcut(&paste_item, "\r", NSEventModifierFlags::empty());
+        menu.addItem(&paste_item);
+    }
+
+    let edit_item = context_menu_item("Edit Text…", sel!(rowMenuEdit:), &clip.id, &target, mtm);
+    set_menu_shortcut(
+        &edit_item,
+        "e",
+        NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
+    );
+    edit_item.setEnabled(can_edit_text(&clip));
+    menu.addItem(&edit_item);
+
+    let rename_item = context_menu_item("Set Title…", sel!(rowMenuRename:), &clip.id, &target, mtm);
+    set_menu_shortcut(
+        &rename_item,
+        "r",
+        NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
+    );
+    rename_item.setEnabled(clip.kind != ClipKind::Command);
+    menu.addItem(&rename_item);
+
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+
+    let preview_item = context_menu_item(
+        "Quick Look",
+        sel!(rowMenuQuickLook:),
+        &clip.id,
+        &target,
+        mtm,
+    );
+    set_menu_shortcut(&preview_item, "y", NSEventModifierFlags::Command);
+    let previewable = with_state(|s| can_preview_clip(&clip, &s.store));
+    preview_item.setEnabled(previewable);
+    menu.addItem(&preview_item);
+
+    let delete_item = context_menu_item("Delete", sel!(rowMenuDelete:), &clip.id, &target, mtm);
+    set_menu_shortcut(&delete_item, "\u{8}", NSEventModifierFlags::empty());
+    menu.addItem(&delete_item);
+
+    // Menu tracking runs a nested run loop; the state borrow is released before
+    // the menu is shown and every action looks the clip up by id again.
+    with_state(|s| s.context_menu_open = true);
+    NSMenu::popUpContextMenu_withEvent_forView(&menu, event, view);
+    with_state(|s| s.context_menu_open = false);
+    restore_panel_focus_after_menu();
+}
+
+fn context_menu_item(
+    title: &str,
+    action: Sel,
+    clip_id: &str,
+    target: &AnyObject,
+    mtm: MainThreadMarker,
+) -> Retained<NSMenuItem> {
+    let item = menu_item(title, action, target, mtm);
+    let id = NSString::from_str(clip_id);
+    unsafe { item.setRepresentedObject(Some(as_any(&*id))) };
+    item
+}
+
+fn set_menu_shortcut(item: &NSMenuItem, key: &str, mask: NSEventModifierFlags) {
+    item.setKeyEquivalent(&NSString::from_str(key));
+    item.setKeyEquivalentModifierMask(mask);
+}
+
+fn menu_clip_id(sender: &NSMenuItem) -> Option<String> {
+    sender
+        .representedObject()?
+        .downcast::<NSString>()
+        .ok()
+        .map(|id| id.to_string())
+}
+
+fn restore_panel_focus_after_menu() {
+    // Quick Look owns the keyboard while it is open; `finish_closed_preview`
+    // gives the popup focus back when the preview closes.
+    if preview_is_open() {
+        return;
+    }
+    let mtm = main_thread();
+    let active = NSApplication::sharedApplication(mtm).isActive();
+    let (visible, panel, search) =
+        with_state(|s| (s.panel.isVisible(), s.panel.clone(), s.search.clone()));
+    if !visible || !active {
+        return;
+    }
+    with_state(|s| s.hide_token = s.hide_token.wrapping_add(1));
+    panel.makeKeyAndOrderFront(None);
+    panel.makeFirstResponder(Some(&search));
 }
 
 pub(crate) fn handle_list_scroll(delta: f64) {
@@ -1435,13 +1807,28 @@ fn toggle_pin_selected() {
     toggle_pin_at(selected);
 }
 
+fn toggle_pin_by_id(id: &str) {
+    let index = with_state(|s| s.store.clips.iter().position(|clip| clip.id == id));
+    let Some(index) = index else {
+        NSBeep();
+        return;
+    };
+    toggle_pin_store(index);
+}
+
 fn toggle_pin_at(filtered_index: usize) {
-    let snapshot = with_state(|s| {
-        let store_index = *filtered_indices(s).get(filtered_index)?;
-        let clip = s.store.clips.get(store_index)?;
-        Some((store_index, clip.pinned))
-    });
-    let Some((store_index, pinned)) = snapshot else {
+    let store_index = with_state(|s| filtered_indices(s).get(filtered_index).copied());
+    let Some(store_index) = store_index else {
+        NSBeep();
+        return;
+    };
+    toggle_pin_store(store_index);
+}
+
+fn toggle_pin_store(store_index: usize) {
+    hide_hover_preview();
+    let pinned = with_state(|s| s.store.clips.get(store_index).map(|clip| clip.pinned));
+    let Some(pinned) = pinned else {
         NSBeep();
         return;
     };
@@ -1479,30 +1866,201 @@ fn paste_filtered(filtered_index: usize, simulate: bool) {
     paste_store_index(index, simulate);
 }
 
+fn paste_clip_by_id(id: &str, simulate: bool) {
+    let index = with_state(|s| s.store.clips.iter().position(|clip| clip.id == id));
+    let Some(index) = index else {
+        NSBeep();
+        return;
+    };
+    paste_store_index(index, simulate);
+}
+
+// ---------------------------------------------------------------------------
+// Hover preview
+// ---------------------------------------------------------------------------
+
+/// Called by the list view when the row under the pointer changes. `None`
+/// hides the callout immediately; a new clip opens after a short dwell so
+/// sweeping across rows does not flash a preview for every one.
+pub(crate) fn hover_preview_changed(id: Option<String>) {
+    let (shown, panel) = with_state(|s| {
+        (
+            s.hover_preview_target.clone(),
+            s.hover_preview.as_ref().map(|parts| parts.panel.clone()),
+        )
+    });
+    let visible = panel.as_ref().is_some_and(|panel| panel.isVisible());
+    if shown == id && visible {
+        return;
+    }
+    if shown != id {
+        hide_hover_preview();
+    }
+    let Some(id) = id else {
+        return;
+    };
+
+    let needs_build = with_state(|s| s.hover_preview.is_none());
+    if needs_build {
+        let parts = views::build_hover_preview(main_thread());
+        with_state(|s| s.hover_preview = Some(parts));
+    }
+
+    let token = with_state(|s| {
+        s.hover_preview_token = s.hover_preview_token.wrapping_add(1);
+        s.hover_preview_target = Some(id.clone());
+        s.hover_preview_token
+    });
+    let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
+        guard("hover_preview", || {
+            show_hover_preview_if_current(&id, token)
+        });
+    });
+    unsafe {
+        NSTimer::scheduledTimerWithTimeInterval_repeats_block(HOVER_PREVIEW_DELAY, false, &block);
+    }
+}
+
+fn hide_hover_preview() {
+    let panel = with_state(|s| {
+        s.hover_preview_token = s.hover_preview_token.wrapping_add(1);
+        s.hover_preview_target = None;
+        s.hover_preview.as_ref().map(|parts| parts.panel.clone())
+    });
+    if let Some(panel) = panel {
+        panel.orderOut(None);
+    }
+}
+
+fn show_hover_preview_if_current(id: &str, token: u64) {
+    let Some((clip, parts)) = with_state(|s| {
+        if s.hover_preview_token != token || s.hover_preview_target.as_deref() != Some(id) {
+            return None;
+        }
+        let clip = s.store.clips.iter().find(|clip| clip.id == id)?.clone();
+        let parts = s.hover_preview.as_ref()?.clone();
+        Some((clip, parts))
+    }) else {
+        return;
+    };
+
+    let body_text = hover_body(&clip);
+    let meta_text = hover_meta(&clip);
+    let icon = app_icon_for_bundle(clip.source_bundle.as_deref());
+    views::present_hover_preview(
+        main_thread(),
+        &parts,
+        body_text.as_deref(),
+        &meta_text,
+        icon.as_deref(),
+    );
+}
+
+fn hover_body(clip: &Clip) -> Option<String> {
+    if clip.kind == ClipKind::Image {
+        return None;
+    }
+    let text = clip
+        .text
+        .as_deref()
+        .filter(|text| !text.is_empty())
+        .unwrap_or(&clip.preview);
+    let mut chars = text.chars();
+    let mut out: String = chars.by_ref().take(2000).collect();
+    if chars.next().is_some() {
+        out.push('…');
+    }
+    Some(out)
+}
+
+pub(crate) fn app_icon_for_bundle(bundle_id: Option<&str>) -> Option<Retained<NSImage>> {
+    let bundle = bundle_id?;
+    if let Some(cached) = with_state(|s| s.app_icons.get(bundle).cloned()) {
+        return cached;
+    }
+    let workspace = NSWorkspace::sharedWorkspace();
+    let icon = workspace
+        .URLForApplicationWithBundleIdentifier(&NSString::from_str(bundle))
+        .and_then(|url| url.path())
+        .map(|path| workspace.iconForFile(&path));
+    with_state(|s| {
+        if s.app_icons.len() >= MAX_APP_ICONS {
+            s.app_icons.clear();
+        }
+        s.app_icons.insert(bundle.to_string(), icon.clone());
+    });
+    icon
+}
+
+fn hover_meta(clip: &Clip) -> String {
+    let source = clip
+        .source_name
+        .as_deref()
+        .filter(|source| !source.is_empty())
+        .unwrap_or("Unknown app");
+    let kind = match clip.kind {
+        ClipKind::Text => "Plain Text",
+        ClipKind::RichText => "Rich Text",
+        ClipKind::Html => "HTML",
+        ClipKind::Image => "Image",
+        ClipKind::File => "File",
+        ClipKind::Command => "Command",
+        ClipKind::Other => "Clipboard item",
+    };
+    let size = if clip.kind == ClipKind::Image {
+        match (clip.width, clip.height) {
+            (Some(width), Some(height)) => {
+                format!("{width}×{height} · {}", human_size(clip.byte_len))
+            }
+            _ => human_size(clip.byte_len),
+        }
+    } else if clip.byte_len <= 64 * 1024 {
+        match clip.text.as_deref() {
+            Some(text) => format!("{} chars", text.chars().count()),
+            None => human_size(clip.byte_len),
+        }
+    } else {
+        human_size(clip.byte_len)
+    };
+    format!("{source} · {kind} · {size}")
+}
+
 #[allow(deprecated)]
 fn paste_store_index(index: usize, simulate: bool) {
     let Some(clip) = with_state(|s| s.store.clips.get(index).cloned()) else {
         return;
     };
-    let target = resolve_target_app();
+    write_clip_to_clipboard(&clip, false, simulate);
+}
 
-    let pb = pasteboard::general();
-    if !with_state(|s| pasteboard::write_clip(&pb, &s.store, &clip)) {
+fn copy_clip_plain_by_id(id: &str) {
+    let clip = with_state(|s| s.store.clips.iter().find(|clip| clip.id == id).cloned());
+    let Some(clip) = clip else {
         NSBeep();
         return;
-    }
-    let change_count = pb.changeCount();
-    with_state(|s| s.last_change_count = change_count);
-    hide_panel();
+    };
+    write_clip_to_clipboard(&clip, true, false);
+}
 
-    if let Some(app) = target {
-        app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
+/// Write `clip` to the general pasteboard, hide the popup and reactivate the
+/// previous app. `plain` writes only the stored plain text; `simulate` also
+/// posts ⌘V once Accessibility allows it.
+#[allow(deprecated)]
+fn write_clip_to_pasteboard(clip: &Clip, plain: bool) -> bool {
+    let pb = pasteboard::general();
+    let written = if plain {
+        pasteboard::write_clip_plain_text(&pb, clip)
+    } else {
+        with_state(|s| pasteboard::write_clip(&pb, &s.store, clip))
+    };
+    if written {
+        let change_count = pb.changeCount();
+        with_state(|s| s.last_change_count = change_count);
     }
+    written
+}
 
-    if !simulate {
-        return;
-    }
-
+fn schedule_simulated_paste() {
     let first_time = with_state(|s| {
         let first = !s.accessibility_asked;
         s.accessibility_asked = true;
@@ -1520,6 +2078,24 @@ fn paste_store_index(index: usize, simulate: bool) {
     }
 }
 
+#[allow(deprecated)]
+fn write_clip_to_clipboard(clip: &Clip, plain: bool, simulate: bool) {
+    let target = resolve_target_app();
+    if !write_clip_to_pasteboard(clip, plain) {
+        NSBeep();
+        return;
+    }
+    hide_panel();
+
+    if let Some(app) = target {
+        app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
+    }
+
+    if simulate {
+        schedule_simulated_paste();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Keyboard
 // ---------------------------------------------------------------------------
@@ -1528,6 +2104,11 @@ pub(crate) fn handle_key_event(event: &NSEvent) -> bool {
     let recording = with_state(|s| s.recording);
     if recording {
         return capture_shortcut(event);
+    }
+    // While the row context menu is open it owns the keyboard, including the
+    // shortcut key equivalents shown in its items.
+    if with_state(|s| s.context_menu_open) {
+        return false;
     }
 
     let active = with_state(|s| {
@@ -1583,12 +2164,20 @@ pub(crate) fn handle_key_event(event: &NSEvent) -> bool {
                 toggle_pin_selected();
                 return true;
             }
+            14 if flags & NS_SHIFT != 0 && flags & (NS_OPTION | NS_CONTROL) == 0 => {
+                edit_selected();
+                return true;
+            }
             14 => {
                 open_pdf_export();
                 return true;
             }
             16 => {
-                toggle_image_preview();
+                toggle_quick_look();
+                return true;
+            }
+            15 if flags & NS_SHIFT != 0 && flags & (NS_OPTION | NS_CONTROL) == 0 => {
+                rename_selected();
                 return true;
             }
             15 if with_state(|s| s.section == ClipboardSection::Commands) => {
@@ -1599,8 +2188,15 @@ pub(crate) fn handle_key_event(event: &NSEvent) -> bool {
         }
     }
 
-    if key == 49 && with_state(|s| s.section == ClipboardSection::Images && s.query.is_empty()) {
-        toggle_image_preview();
+    // Space opens Quick Look in every tab while the search field is empty. A
+    // leading space would otherwise be consumed instead of typed; the existing
+    // image-tab behaviour already made that trade-off. Option/Control/Command
+    // combinations keep their normal meaning (for example Option+Space).
+    if key == 49
+        && flags & (NS_OPTION | NS_CONTROL | NS_COMMAND) == 0
+        && with_state(|s| s.query.is_empty())
+    {
+        toggle_quick_look();
         return true;
     }
 
@@ -1763,18 +2359,229 @@ pub fn on_global_hotkey() {
 }
 
 // ---------------------------------------------------------------------------
-// Deletion
+// Titles and deletion
 // ---------------------------------------------------------------------------
 
-fn delete_selected() {
-    let mtm = main_thread();
-    let (index, confirm) = with_state(|s| {
-        (
-            filtered_indices(s).get(s.selected).copied(),
-            s.settings.confirm_delete,
-        )
+fn can_edit_text(clip: &Clip) -> bool {
+    matches!(clip.kind, ClipKind::Text | ClipKind::Command)
+        && clip
+            .text
+            .as_deref()
+            .is_some_and(|text| text.len() <= MAX_EDIT_TEXT_BYTES)
+}
+
+fn edit_selected() {
+    let id = with_state(|s| {
+        let index = *filtered_indices(s).get(s.selected)?;
+        s.store.clips.get(index).map(|clip| clip.id.clone())
     });
-    let Some(index) = index else {
+    let Some(id) = id else {
+        NSBeep();
+        return;
+    };
+    edit_clip(&id);
+}
+
+#[allow(deprecated)]
+fn edit_clip(id: &str) {
+    hide_hover_preview();
+    let mtm = main_thread();
+    let Some((current, kind, has_text)) = with_state(|s| {
+        let clip = s.store.clips.iter().find(|clip| clip.id == id)?;
+        Some((
+            clip.text.clone().unwrap_or_default(),
+            clip.kind,
+            clip.text.is_some(),
+        ))
+    }) else {
+        NSBeep();
+        return;
+    };
+    if !matches!(kind, ClipKind::Text | ClipKind::Command) || !has_text {
+        NSBeep();
+        return;
+    }
+    if current.len() > MAX_EDIT_TEXT_BYTES {
+        show_alert(
+            "Clipping is too large to edit",
+            "Only text up to 1 MiB can be edited in the app. Copy it and edit it elsewhere.",
+        );
+        return;
+    }
+
+    activate_app();
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str("Edit clipping text"));
+    alert.setInformativeText(&NSString::from_str(
+        "Saving updates this history entry, its preview and its size. The clipboard changes the next time you copy it. Empty text is not saved.",
+    ));
+    alert.addButtonWithTitle(&NSString::from_str("Save"));
+    alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+
+    let width = 440.0;
+    let height = 240.0;
+    let scroll = NSScrollView::new(mtm);
+    scroll.setFrame(NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(width, height),
+    ));
+    scroll.setBorderType(NSBorderType::BezelBorder);
+    scroll.setHasVerticalScroller(true);
+    scroll.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
+
+    let text_view = NSTextView::new(mtm);
+    text_view.setFrame(NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(width, height),
+    ));
+    text_view.setMinSize(NSSize::new(0.0, height));
+    text_view.setMaxSize(NSSize::new(width, 1_000_000.0));
+    text_view.setVerticallyResizable(true);
+    text_view.setHorizontallyResizable(false);
+    text_view.setRichText(false);
+    text_view.setAllowsUndo(true);
+    text_view.setFont(Some(&NSFont::systemFontOfSize(13.0)));
+    text_view.setString(&NSString::from_str(&current));
+    // SAFETY: an `NSTextView` created by `new` owns its text container for its
+    // whole lifetime, so the returned reference is valid during this setup.
+    if let Some(container) = unsafe { text_view.textContainer() } {
+        container.setWidthTracksTextView(true);
+        container.setContainerSize(NSSize::new(width, 1_000_000.0));
+    }
+    scroll.setDocumentView(Some(&text_view));
+
+    alert.setAccessoryView(Some(&scroll));
+    alert.window().makeFirstResponder(Some(&text_view));
+
+    if alert.runModal() != NSAlertFirstButtonReturn {
+        return;
+    }
+
+    let edited = text_view.string().to_string();
+    let outcome = with_state(|s| {
+        let Some(index) = s.store.clips.iter().position(|clip| clip.id == id) else {
+            return Err(EditTextError::Unavailable);
+        };
+        s.store.set_text(index, &edited)
+    });
+    match outcome {
+        Ok(true) => {
+            with_state(|s| s.store.save());
+            refresh_ui();
+        }
+        Ok(false) => {}
+        Err(EditTextError::Empty) => show_alert(
+            "Text not saved",
+            "The clipping text cannot be empty or only whitespace.",
+        ),
+        Err(EditTextError::TooLarge) => show_alert(
+            "Text not saved",
+            "The text is larger than the 1 MiB editing limit.",
+        ),
+        Err(EditTextError::Duplicate) => show_alert(
+            "Text not saved",
+            "Another clipping already has this exact text.",
+        ),
+        Err(EditTextError::Unavailable) => NSBeep(),
+    }
+}
+
+fn rename_selected() {
+    let id = with_state(|s| {
+        let index = *filtered_indices(s).get(s.selected)?;
+        s.store.clips.get(index).map(|clip| clip.id.clone())
+    });
+    let Some(id) = id else {
+        NSBeep();
+        return;
+    };
+    rename_clip(&id);
+}
+
+#[allow(deprecated)]
+fn rename_clip(id: &str) {
+    hide_hover_preview();
+    let mtm = main_thread();
+    let Some((current, can_rename)) = with_state(|s| {
+        let clip = s.store.clips.iter().find(|clip| clip.id == id)?;
+        Some((
+            clip.title.clone().unwrap_or_default(),
+            clip.kind != ClipKind::Command,
+        ))
+    }) else {
+        NSBeep();
+        return;
+    };
+    if !can_rename {
+        NSBeep();
+        return;
+    }
+
+    activate_app();
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str("Set clipping title"));
+    alert.setInformativeText(&NSString::from_str(
+        "This title is shown above the copied text. Search still matches both the title and the copied text. Leave it empty to use the normal preview.",
+    ));
+    alert.addButtonWithTitle(&NSString::from_str("Save"));
+    alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+
+    let field = NSTextField::new(mtm);
+    field.setFrame(NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(280.0, 24.0),
+    ));
+    field.setFont(Some(&NSFont::systemFontOfSize(13.0)));
+    field.setEditable(true);
+    field.setBezeled(true);
+    field.setDrawsBackground(true);
+    field.setStringValue(&NSString::from_str(&current));
+    field.setPlaceholderString(Some(&NSString::from_str("Optional title")));
+    alert.setAccessoryView(Some(&field));
+    alert.window().makeFirstResponder(Some(&field));
+
+    if alert.runModal() != NSAlertFirstButtonReturn {
+        return;
+    }
+
+    let raw = field.stringValue().to_string();
+    let changed = with_state(|s| {
+        let Some(index) = s.store.clips.iter().position(|clip| clip.id == id) else {
+            return false;
+        };
+        let changed = s.store.set_title(index, &raw);
+        if changed {
+            s.store.save();
+        }
+        changed
+    });
+    if changed {
+        refresh_ui();
+    }
+}
+
+fn delete_selected() {
+    let id = with_state(|s| {
+        let index = *filtered_indices(s).get(s.selected)?;
+        s.store.clips.get(index).map(|clip| clip.id.clone())
+    });
+    let Some(id) = id else {
+        return;
+    };
+    delete_clip(&id);
+}
+
+fn delete_clip(id: &str) {
+    hide_hover_preview();
+    let mtm = main_thread();
+    let Some(confirm) = with_state(|s| {
+        s.store
+            .clips
+            .iter()
+            .any(|clip| clip.id == id)
+            .then_some(s.settings.confirm_delete)
+    }) else {
+        NSBeep();
         return;
     };
 
@@ -1790,7 +2597,12 @@ fn delete_selected() {
         }
     }
 
+    // Resolve the id again: the 1 s pasteboard poll can insert a clip while the
+    // confirmation alert is up, which would shift a previously captured index.
     with_state(|s| {
+        let Some(index) = s.store.clips.iter().position(|clip| clip.id == id) else {
+            return;
+        };
         s.store.remove(index);
         s.store.save();
     });
@@ -1798,17 +2610,71 @@ fn delete_selected() {
     prune_thumbnails();
 }
 
-fn clear_section(section: ClipboardSection) {
-    let mtm = main_thread();
-    let (count, confirm) = with_state(|s| {
-        let count = s
-            .store
-            .clips
-            .iter()
-            .filter(|clip| section_matches(section, clip))
-            .count();
-        (count, s.settings.confirm_delete)
+fn clear_scope_messages(scope: ClearScope) -> (&'static str, &'static str) {
+    match scope {
+        ClearScope::Everything => (
+            "Delete all clippings?",
+            "This permanently removes every text and image clipping, including pinned ones. Terminal commands are kept. This action cannot be undone.",
+        ),
+        ClearScope::Text => (
+            "Delete all text clippings?",
+            "This removes every text, rich text, HTML and file clipping in the Text tab, including pinned ones. Images and terminal commands are kept. This action cannot be undone.",
+        ),
+        ClearScope::Images => (
+            "Delete all images?",
+            "This removes every image and its thumbnail, including pinned ones. Text clippings and terminal commands are kept. This action cannot be undone.",
+        ),
+        ClearScope::UnpinnedText => (
+            "Delete unpinned text clippings?",
+            "This removes every unpinned text, rich text, HTML and file clipping. Pinned text clippings, images and terminal commands are kept. This action cannot be undone.",
+        ),
+        ClearScope::UnpinnedImages => (
+            "Delete unpinned images?",
+            "This removes every unpinned image and its thumbnail. Pinned images, text clippings and terminal commands are kept. This action cannot be undone.",
+        ),
+    }
+}
+
+/// Delete every clipping in `scope`. Commands are never touched. The caller
+/// does not hold a state borrow while the confirmation alert runs.
+/// Delete a scope without asking. Used by the confirmation path and by MCP,
+/// whose calls are already explicit. Returns the number of removed clippings.
+fn perform_clear_scope(scope: ClearScope) -> usize {
+    let (removed, search) = with_state(|s| {
+        let removed = s.store.clear_scope(scope);
+        if removed > 0 {
+            s.store.save();
+            s.selected = 0;
+            s.scroll = 0.0;
+            // A global delete should not leave a stale search behind the popup.
+            if scope == ClearScope::Everything {
+                s.query.clear();
+            }
+        }
+        let search = if removed > 0 && scope == ClearScope::Everything {
+            Some(s.search.clone())
+        } else {
+            None
+        };
+        (removed, search)
     });
+    if let Some(search) = search {
+        search.setStringValue(&NSString::from_str(""));
+    }
+    if removed > 0 {
+        refresh_ui();
+        if scope == ClearScope::Everything {
+            clear_thumbnail_cache();
+        } else {
+            prune_thumbnails();
+        }
+    }
+    removed
+}
+
+fn clear_scope(scope: ClearScope) {
+    let mtm = main_thread();
+    let (count, confirm) = with_state(|s| (s.store.count_scope(scope), s.settings.confirm_delete));
     if count == 0 {
         NSBeep();
         return;
@@ -1817,71 +2683,107 @@ fn clear_section(section: ClipboardSection) {
     if confirm {
         activate_app();
         let alert = NSAlert::new(mtm);
-        let (message, info) = match section {
-            ClipboardSection::Text => (
-                "Delete all text clippings?",
-                "This removes every text, rich text, HTML and file clipping. Images are kept. This action cannot be undone.",
-            ),
-            ClipboardSection::Images => (
-                "Delete all images?",
-                "This removes every copied image and its thumbnail. Text clippings are kept. This action cannot be undone.",
-            ),
-            ClipboardSection::Commands => (
-                "Delete all terminal commands?",
-                "This removes every command read from your shell history. Clippings are kept. This action cannot be undone.",
-            ),
-        };
+        let (message, info) = clear_scope_messages(scope);
         alert.setMessageText(&NSString::from_str(message));
         alert.setInformativeText(&NSString::from_str(info));
-        alert.addButtonWithTitle(&NSString::from_str("Delete"));
+        alert.addButtonWithTitle(&NSString::from_str(if scope == ClearScope::Everything {
+            "Delete All"
+        } else {
+            "Delete"
+        }));
         alert.addButtonWithTitle(&NSString::from_str("Cancel"));
         if alert.runModal() != NSAlertFirstButtonReturn {
             return;
         }
     }
 
-    with_state(|s| {
-        s.store.remove_where(|clip| section_matches(section, clip));
-        s.store.save();
-        s.selected = 0;
-        s.scroll = 0.0;
-    });
-    refresh_ui();
-    prune_thumbnails();
+    perform_clear_scope(scope);
 }
 
-fn clear_all() {
-    let mtm = main_thread();
-    let confirm = with_state(|s| s.settings.confirm_delete);
-    if confirm {
-        activate_app();
-        let alert = NSAlert::new(mtm);
-        alert.setMessageText(&NSString::from_str("Delete all clippings?"));
-        alert.setInformativeText(&NSString::from_str(
-            "This permanently removes your clipboard history. Terminal commands are kept. This action cannot be undone.",
-        ));
-        alert.addButtonWithTitle(&NSString::from_str("Delete All"));
-        alert.addButtonWithTitle(&NSString::from_str("Cancel"));
-        if alert.runModal() != NSAlertFirstButtonReturn {
-            return;
-        }
-    }
-
-    let search = with_state(|s| {
-        // "Clear All Clippings" leaves shell commands alone: they are read from
-        // the user's own history file, not captured from the pasteboard.
-        s.store.remove_where(|clip| clip.kind != ClipKind::Command);
-        s.store.save();
-        s.selected = 0;
-        s.scroll = 0.0;
-        s.query.clear();
-        s.search.clone()
+/// Footer buttons: clear the active tab, either every row or only unpinned
+/// rows. The Commands tab has no clear action.
+fn clear_current_scope(unpinned: bool) {
+    let scope = with_state(|s| match (s.section, unpinned) {
+        (ClipboardSection::Text, false) => Some(ClearScope::Text),
+        (ClipboardSection::Images, false) => Some(ClearScope::Images),
+        (ClipboardSection::Text, true) => Some(ClearScope::UnpinnedText),
+        (ClipboardSection::Images, true) => Some(ClearScope::UnpinnedImages),
+        (ClipboardSection::Commands, _) => None,
     });
-    search.setStringValue(&NSString::from_str(""));
-    refresh_ui();
-    // Clear All Clippings removes the thumbnail cache too, including pending
-    // jobs for clips that no longer exist.
-    clear_thumbnail_cache();
+    if let Some(scope) = scope {
+        clear_scope(scope);
+    }
+}
+
+/// Refresh the counts and enabled buttons in the Preferences **History** tab.
+fn update_history_controls() {
+    let (summary, enabled, prefs) = with_state(|s| {
+        let all = s.store.count_scope(ClearScope::Everything);
+        let text = s.store.count_scope(ClearScope::Text);
+        let images = s.store.count_scope(ClearScope::Images);
+        let unpinned_text = s.store.count_scope(ClearScope::UnpinnedText);
+        let unpinned_images = s.store.count_scope(ClearScope::UnpinnedImages);
+        let pinned = s
+            .store
+            .clips
+            .iter()
+            .filter(|clip| clip.pinned && clip.kind != ClipKind::Command)
+            .count();
+        let summary = format!("{text} text · {images} images · {pinned} pinned");
+        let prefs = s.prefs.as_ref().map(|prefs| {
+            (
+                prefs.history_summary.clone(),
+                prefs.delete_all_clippings.clone(),
+                prefs.delete_all_images.clone(),
+                prefs.delete_all_text.clone(),
+                prefs.delete_unpinned_text.clone(),
+                prefs.delete_unpinned_images.clone(),
+            )
+        });
+        (
+            summary,
+            [
+                all > 0,
+                images > 0,
+                text > 0,
+                unpinned_text > 0,
+                unpinned_images > 0,
+            ],
+            prefs,
+        )
+    });
+    let Some((summary_field, all, images, text, unpinned_text, unpinned_images)) = prefs else {
+        return;
+    };
+    summary_field.setStringValue(&NSString::from_str(&summary));
+    all.setEnabled(enabled[0]);
+    images.setEnabled(enabled[1]);
+    text.setEnabled(enabled[2]);
+    unpinned_text.setEnabled(enabled[3]);
+    unpinned_images.setEnabled(enabled[4]);
+}
+
+fn disk_size(bytes: u64) -> String {
+    human_size(usize::try_from(bytes).unwrap_or(usize::MAX))
+}
+
+/// Refresh the disk-usage line in the Preferences **History** tab. History
+/// files and the temporary preview cache are measured separately.
+fn update_history_storage() {
+    let storage = with_state(|s| s.store.storage_usage());
+    let cache = thumbnails::cache_usage_bytes();
+    let label = with_state(|s| s.prefs.as_ref().map(|prefs| prefs.history_storage.clone()));
+    let Some(label) = label else {
+        return;
+    };
+    let history = storage.history_total();
+    let total = history.saturating_add(cache);
+    label.setStringValue(&NSString::from_str(&format!(
+        "Disk usage: {} · history {} · cache {}",
+        disk_size(total),
+        disk_size(history),
+        disk_size(cache)
+    )));
 }
 
 // ---------------------------------------------------------------------------
@@ -1889,6 +2791,7 @@ fn clear_all() {
 // ---------------------------------------------------------------------------
 
 fn search_changed() {
+    hide_hover_preview();
     with_state(|s| {
         s.query = s.search.stringValue().to_string();
         s.selected = 0;
@@ -1904,6 +2807,7 @@ fn search_changed() {
 
 #[allow(deprecated)]
 fn open_preferences() {
+    hide_hover_preview();
     let mtm = main_thread();
     hide_panel();
 
@@ -1945,16 +2849,60 @@ fn open_preferences() {
             prefs
                 .shortcut_button
                 .setTitle(&NSString::from_str(&s.settings.hotkey_display));
+            prefs
+                .pinned_background_well
+                .setColor(&views::color_from_rgb(s.settings.pinned_background));
+            prefs
+                .pinned_indicator_well
+                .setColor(&views::color_from_rgb(s.settings.pinned_indicator));
             prefs.ignored_view.clear_selection();
             prefs.ignored_view.setNeedsDisplay(true);
         }
     });
+    update_history_controls();
+    update_history_storage();
 
     NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
     let window = with_state(|s| s.prefs.as_ref().map(|p| p.window.clone()));
     if let Some(window) = window {
         window.makeKeyAndOrderFront(None);
     }
+}
+
+fn set_pinned_color(sender: &NSColorWell, background: bool) {
+    let color = views::rgb_from_color(&sender.color());
+    let (settings, list) = with_state(|s| {
+        if background {
+            s.settings.pinned_background = color;
+        } else {
+            s.settings.pinned_indicator = color;
+        }
+        (s.settings.clone(), s.list.clone())
+    });
+    settings::save(&settings);
+    list.setNeedsDisplay(true);
+}
+
+fn reset_pinned_colors() {
+    let (settings, background_well, indicator_well, list) = with_state(|s| {
+        s.settings.pinned_background = DEFAULT_PINNED_BACKGROUND;
+        s.settings.pinned_indicator = DEFAULT_PINNED_INDICATOR;
+        let prefs = s.prefs.as_ref();
+        (
+            s.settings.clone(),
+            prefs.map(|p| p.pinned_background_well.clone()),
+            prefs.map(|p| p.pinned_indicator_well.clone()),
+            s.list.clone(),
+        )
+    });
+    settings::save(&settings);
+    if let Some(well) = background_well {
+        well.setColor(&views::color_from_rgb(DEFAULT_PINNED_BACKGROUND));
+    }
+    if let Some(well) = indicator_well {
+        well.setColor(&views::color_from_rgb(DEFAULT_PINNED_INDICATOR));
+    }
+    list.setNeedsDisplay(true);
 }
 
 fn max_clips_changed(sender: &NSTextField) {
@@ -2130,8 +3078,12 @@ fn clear_thumbnail_cache() {
         s.thumbnail_service.clear_now();
         s.thumbnails.clear();
         s.thumbnail_failed.clear();
+        s.text_previews.clear();
         s.list.setNeedsDisplay(true);
     });
+    // The button also clears the disposable Quick Look preview directory.
+    thumbnails::reset_previews();
+    update_history_storage();
 }
 
 /// Called from the 0.1 s timer on the main thread. The worker only writes PNG
@@ -2210,6 +3162,7 @@ fn pdf_refresh() {
 }
 
 fn open_pdf_export() {
+    hide_hover_preview();
     let mtm = main_thread();
     let count = with_state(|s| {
         s.store
@@ -2500,47 +3453,199 @@ fn preview_is_open() -> bool {
         && preview_panel().is_some_and(|panel| panel.isVisible())
 }
 
-/// Space (Images tab) or ⌘Y: show the selected image in the shared Quick Look
-/// panel, or close it when it is already open.
-fn toggle_image_preview() {
+/// Bound on the text written to a temporary preview file. The full clip stays
+/// in the history; Quick Look only needs enough to show something useful.
+const MAX_PREVIEW_TEXT_BYTES: usize = 8 * 1024 * 1024;
+
+/// Where the selected clip can be read from for the shared Quick Look panel.
+enum PreviewSource {
+    /// A `File` clipping still points at an existing file or directory.
+    ExistingFile { path: PathBuf, is_dir: bool },
+    /// Editable text written to a stable per-clip preview file.
+    TextBytes { bytes: Vec<u8> },
+    /// Blob or fallback text written to a hash-named preview file.
+    Bytes {
+        bytes: Vec<u8>,
+        extension: &'static str,
+    },
+}
+
+/// Space (any tab, empty search) or ⌘Y: show the selected clip in the shared
+/// Quick Look panel, or close it when it is already open.
+fn toggle_quick_look() {
+    let id = with_state(|s| {
+        let index = *filtered_indices(s).get(s.selected)?;
+        s.store.clips.get(index).map(|clip| clip.id.clone())
+    });
+    let Some(id) = id else {
+        NSBeep();
+        return;
+    };
+    toggle_preview_for_clip(&id);
+}
+
+/// True when the row menu may offer Quick Look. This only checks that the
+/// stored source still exists; decoding happens when the panel is opened.
+fn can_preview_clip(clip: &Clip, store: &Store) -> bool {
+    match clip.kind {
+        ClipKind::Text | ClipKind::Command => {
+            clip.text.as_deref().is_some_and(|text| !text.is_empty())
+        }
+        ClipKind::RichText | ClipKind::Html | ClipKind::Image => clip
+            .blob
+            .as_deref()
+            .and_then(|blob| store.blob_file(blob))
+            .is_some_and(|path| path.is_file()),
+        ClipKind::File => stored_file_path(clip).is_some(),
+        ClipKind::Other => false,
+    }
+}
+
+/// Resolve a `File` clipping to a path that still exists. Relative paths and
+/// special files are refused so the panel never opens an arbitrary target.
+fn stored_file_path(clip: &Clip) -> Option<(PathBuf, bool)> {
+    let path = PathBuf::from(clip.text.as_deref()?);
+    if !path.is_absolute() {
+        return None;
+    }
+    let metadata = fs::metadata(&path).ok()?;
+    if !metadata.is_file() && !metadata.is_dir() {
+        return None;
+    }
+    Some((path, metadata.is_dir()))
+}
+
+fn preview_source_for_clip(clip: &Clip, store: &Store) -> Option<PreviewSource> {
+    match clip.kind {
+        ClipKind::Text | ClipKind::Command => {
+            let text = clip.text.as_deref().filter(|text| !text.is_empty())?;
+            let bytes = bounded_preview_text(text).as_bytes().to_vec();
+            if can_edit_text(clip) {
+                Some(PreviewSource::TextBytes { bytes })
+            } else {
+                // Too large for the editor: preview it read-only with a
+                // hash-named file that is never watched for changes.
+                Some(PreviewSource::Bytes {
+                    bytes,
+                    extension: "txt",
+                })
+            }
+        }
+        ClipKind::RichText => {
+            let data_type = clip.data_type.as_deref().unwrap_or("public.rtf");
+            // RTFD pasteboard data is a file wrapper, not a flat document, so
+            // previewing the plain-text fallback is more reliable than writing
+            // those bytes to a `.rtfd` file.
+            if data_type == "public.rtfd"
+                && let Some(text) = clip.text.as_deref().filter(|text| !text.is_empty())
+            {
+                return Some(PreviewSource::Bytes {
+                    bytes: bounded_preview_text(text).as_bytes().to_vec(),
+                    extension: "txt",
+                });
+            }
+            Some(PreviewSource::Bytes {
+                bytes: store.read_blob(clip.blob.as_deref()?)?,
+                extension: if data_type == "public.rtfd" {
+                    "rtfd"
+                } else {
+                    "rtf"
+                },
+            })
+        }
+        ClipKind::Html => Some(PreviewSource::Bytes {
+            bytes: store.read_blob(clip.blob.as_deref()?)?,
+            extension: "html",
+        }),
+        ClipKind::Image => {
+            let bytes = store.read_blob(clip.blob.as_deref()?)?;
+            let info = antirustpaste_imaging::info(&bytes).ok()?;
+            let extension = match info.format {
+                antirustpaste_imaging::Format::Png => "png",
+                antirustpaste_imaging::Format::Tiff => "tiff",
+                antirustpaste_imaging::Format::Jpeg => "jpg",
+            };
+            Some(PreviewSource::Bytes { bytes, extension })
+        }
+        ClipKind::File => {
+            let (path, is_dir) = stored_file_path(clip)?;
+            Some(PreviewSource::ExistingFile { path, is_dir })
+        }
+        ClipKind::Other => None,
+    }
+}
+
+/// Cut a text preview on a UTF-8 boundary; the caller keeps the full clip.
+fn bounded_preview_text(text: &str) -> &str {
+    if text.len() <= MAX_PREVIEW_TEXT_BYTES {
+        return text;
+    }
+    let mut end = MAX_PREVIEW_TEXT_BYTES;
+    while !text.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    &text[..end]
+}
+
+fn toggle_preview_for_clip(id: &str) {
     let mtm = main_thread();
     let Some(panel) = (unsafe { QLPreviewPanel::sharedPreviewPanel(mtm) }) else {
         return;
     };
     if panel.isVisible() {
-        close_image_preview();
+        close_quick_look();
         return;
     }
 
-    let Some((hash, bytes)) = with_state(|s| {
-        let index = *filtered_indices(s).get(s.selected)?;
-        let clip = s.store.clips.get(index)?;
-        if clip.kind != ClipKind::Image {
-            return None;
-        }
-        let blob = clip.blob.as_deref()?;
-        let bytes = s.store.read_blob(blob)?;
-        Some((clip.hash, bytes))
+    let Some((hash, source)) = with_state(|s| {
+        let clip = s.store.clips.iter().find(|clip| clip.id == id)?;
+        let source = preview_source_for_clip(clip, &s.store)?;
+        Some((clip.hash, source))
     }) else {
         NSBeep();
         return;
     };
-    let Ok(info) = antirustpaste_imaging::info(&bytes) else {
-        NSBeep();
-        return;
-    };
-    let extension = match info.format {
-        antirustpaste_imaging::Format::Png => "png",
-        antirustpaste_imaging::Format::Tiff => "tiff",
-        antirustpaste_imaging::Format::Jpeg => "jpg",
-    };
-    let Some(path) = write_preview_file(hash, &bytes, extension) else {
-        NSBeep();
-        return;
+
+    let (url, preview_file) = match source {
+        PreviewSource::ExistingFile { path, is_dir } => (
+            NSURL::fileURLWithPath_isDirectory(
+                &NSString::from_str(&path.to_string_lossy()),
+                is_dir,
+            ),
+            None,
+        ),
+        PreviewSource::TextBytes { bytes } => {
+            let (name, watched) = match text_preview_file_name(id) {
+                Some(name) => (name, true),
+                None => (format!("preview-{hash}.txt"), false),
+            };
+            let Some(path) = write_preview_file(&name, &bytes) else {
+                NSBeep();
+                return;
+            };
+            if watched {
+                watch_text_preview(&path, id);
+            }
+            let url = NSURL::fileURLWithPath_isDirectory(
+                &NSString::from_str(&path.to_string_lossy()),
+                false,
+            );
+            (url, Some(path))
+        }
+        PreviewSource::Bytes { bytes, extension } => {
+            let name = format!("preview-{hash}.{extension}");
+            let Some(path) = write_preview_file(&name, &bytes) else {
+                NSBeep();
+                return;
+            };
+            let url = NSURL::fileURLWithPath_isDirectory(
+                &NSString::from_str(&path.to_string_lossy()),
+                false,
+            );
+            (url, Some(path))
+        }
     };
 
-    let url =
-        NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&path.to_string_lossy()), false);
     let delegate = delegate_ref();
     let source = ProtocolObject::from_ref(&*delegate);
     unsafe {
@@ -2549,14 +3654,17 @@ fn toggle_image_preview() {
     }
     let old = with_state(|s| {
         let old = s.preview_file.take();
-        s.preview_file = Some(path.clone());
+        s.preview_file = preview_file.clone();
         s.preview_item = Some(url);
         old
     });
     if let Some(old) = old
-        && old != path
+        && preview_file.as_deref() != Some(old.as_path())
     {
-        let _ = fs::remove_file(old);
+        let watched = with_state(|s| s.text_previews.iter().any(|watch| watch.path == old));
+        if !watched {
+            let _ = fs::remove_file(old);
+        }
     }
 
     unsafe { panel.reloadData() };
@@ -2564,12 +3672,31 @@ fn toggle_image_preview() {
     panel.makeKeyAndOrderFront(None);
 }
 
-fn write_preview_file(hash: u64, bytes: &[u8], extension: &str) -> Option<PathBuf> {
+/// A stable file name per text clip keeps the Quick Look → TextEdit round-trip
+/// on one path. Refuse ids that could escape the private preview directory.
+fn text_preview_file_name(id: &str) -> Option<String> {
+    if id.is_empty()
+        || id.len() > 64
+        || !id.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+    {
+        return None;
+    }
+    Some(format!("preview-{id}.txt"))
+}
+
+fn write_preview_file(name: &str, bytes: &[u8]) -> Option<PathBuf> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
 
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name == ".." {
+        return None;
+    }
     let dir = thumbnails::ensure_preview_dir().ok()?;
-    let path = dir.join(format!("preview-{hash}.{extension}"));
+    let path = dir.join(name);
+    // A stale symlink must never redirect the write outside the private cache.
+    if fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        let _ = fs::remove_file(&path);
+    }
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -2581,7 +3708,129 @@ fn write_preview_file(hash: u64, bytes: &[u8], extension: &str) -> Option<PathBu
     Some(path)
 }
 
-fn close_image_preview() {
+/// Remember a text preview so the 1 s poll can import edits saved in TextEdit.
+fn watch_text_preview(path: &Path, clip_id: &str) {
+    let metadata = fs::metadata(path).ok();
+    let watched = WatchedTextPreview {
+        path: path.to_path_buf(),
+        clip_id: clip_id.to_string(),
+        modified: metadata.as_ref().and_then(|meta| meta.modified().ok()),
+        len: metadata.as_ref().map(|meta| meta.len()).unwrap_or(0),
+    };
+    let removed: Vec<PathBuf> = with_state(|s| {
+        // A newer preview of the same clip supersedes its older documents.
+        s.text_previews
+            .retain(|entry| entry.clip_id != clip_id && entry.path != path);
+        s.text_previews.push(watched);
+        let mut removed = Vec::new();
+        while s.text_previews.len() > MAX_WATCHED_TEXT_PREVIEWS {
+            removed.push(s.text_previews.remove(0).path);
+        }
+        removed
+    });
+    for path in removed {
+        let _ = fs::remove_file(path);
+    }
+}
+
+/// Import a saved TextEdit change. Quick Look closes as soon as TextEdit opens,
+/// so this cannot wait for the panel: it watches the temporary file while the
+/// app runs and updates the clip when the file changes.
+fn poll_edited_text_previews() {
+    let watched: Vec<(PathBuf, String, Option<SystemTime>, u64)> = with_state(|s| {
+        s.text_previews
+            .iter()
+            .map(|entry| {
+                (
+                    entry.path.clone(),
+                    entry.clip_id.clone(),
+                    entry.modified,
+                    entry.len,
+                )
+            })
+            .collect()
+    });
+
+    for (path, clip_id, last_modified, last_len) in watched {
+        let Ok(symlink_metadata) = fs::symlink_metadata(&path) else {
+            remove_text_preview_watch(&path);
+            continue;
+        };
+        if symlink_metadata.file_type().is_symlink() || !symlink_metadata.is_file() {
+            remove_text_preview_watch(&path);
+            let _ = fs::remove_file(&path);
+            continue;
+        }
+        let Ok(metadata) = fs::metadata(&path) else {
+            remove_text_preview_watch(&path);
+            continue;
+        };
+        let modified = metadata.modified().ok();
+        let len = metadata.len();
+        if modified == last_modified && len == last_len {
+            continue;
+        }
+        with_state(|s| {
+            if let Some(entry) = s.text_previews.iter_mut().find(|entry| entry.path == path) {
+                entry.modified = modified;
+                entry.len = len;
+            }
+        });
+        if len > MAX_EDIT_TEXT_BYTES as u64 {
+            continue;
+        }
+        let Some(text) = read_bounded_text_file(&path) else {
+            continue;
+        };
+        if text.trim().is_empty() {
+            continue;
+        }
+
+        let outcome = with_state(|s| {
+            let Some(index) = s.store.clips.iter().position(|clip| clip.id == clip_id) else {
+                return Err(EditTextError::Unavailable);
+            };
+            s.store.set_text(index, &text)
+        });
+        match outcome {
+            Ok(true) => {
+                with_state(|s| s.store.save());
+                refresh_ui();
+            }
+            Ok(false) => {}
+            Err(EditTextError::Unavailable) => {
+                remove_text_preview_watch(&path);
+                let _ = fs::remove_file(&path);
+            }
+            Err(EditTextError::Duplicate) => {
+                // The user can resolve the duplicate in the editor; do not
+                // overwrite the other row or steal focus from TextEdit.
+                NSBeep();
+            }
+            Err(EditTextError::Empty | EditTextError::TooLarge) => {}
+        }
+    }
+}
+
+fn remove_text_preview_watch(path: &Path) {
+    with_state(|s| s.text_previews.retain(|entry| entry.path != path));
+}
+
+fn read_bounded_text_file(path: &Path) -> Option<String> {
+    use std::io::Read;
+
+    let mut limited = fs::File::open(path)
+        .ok()?
+        .take(MAX_EDIT_TEXT_BYTES as u64 + 1);
+    let mut bytes = Vec::new();
+    limited.read_to_end(&mut bytes).ok()?;
+    if bytes.len() > MAX_EDIT_TEXT_BYTES {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
+}
+
+fn close_quick_look() {
     if let Some(panel) = preview_panel() {
         panel.orderOut(None);
     }
@@ -2614,11 +3863,19 @@ fn finish_closed_preview() {
 }
 
 fn cleanup_preview() {
-    let path = with_state(|s| {
+    let (path, watched) = with_state(|s| {
         s.preview_item = None;
-        s.preview_file.take()
+        let path = s.preview_file.take();
+        let watched = path
+            .as_ref()
+            .is_some_and(|path| s.text_previews.iter().any(|entry| &entry.path == path));
+        (path, watched)
     });
-    if let Some(path) = path {
+    // A watched text file may still be open in TextEdit, so it stays until the
+    // editor saves, the watch is evicted, or the app quits.
+    if let Some(path) = path
+        && !watched
+    {
         let _ = fs::remove_file(path);
     }
     if let Some(panel) = preview_panel() {
@@ -3123,6 +4380,53 @@ mod tests {
             "antirustpaste-app-test-{}-{name}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn text_preview_is_cut_on_a_utf8_boundary() {
+        let short = "antirustpaste-smoke-1";
+        assert_eq!(bounded_preview_text(short), short);
+
+        let mut long = String::with_capacity(MAX_PREVIEW_TEXT_BYTES + 4);
+        long.push_str(&"a".repeat(MAX_PREVIEW_TEXT_BYTES - 1));
+        long.push('€');
+        let preview = bounded_preview_text(&long);
+        assert_eq!(preview.len(), MAX_PREVIEW_TEXT_BYTES - 1);
+        assert_eq!(preview.as_bytes().last(), Some(&b'a'));
+    }
+
+    #[test]
+    fn text_preview_names_stay_inside_the_cache() {
+        assert_eq!(
+            text_preview_file_name("abc-123").as_deref(),
+            Some("preview-abc-123.txt")
+        );
+        assert_eq!(text_preview_file_name("../secret"), None);
+        assert_eq!(text_preview_file_name("a/b"), None);
+        assert_eq!(text_preview_file_name(""), None);
+        assert_eq!(text_preview_file_name(&"x".repeat(65)), None);
+    }
+
+    #[test]
+    fn bounded_text_file_reads_respect_the_edit_limit() {
+        let dir = scratch("bounded-text");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("scratch directory");
+        let path = dir.join("clip.txt");
+
+        fs::write(&path, "antirustpaste-smoke-1").expect("seed text");
+        assert_eq!(
+            read_bounded_text_file(&path).as_deref(),
+            Some("antirustpaste-smoke-1")
+        );
+
+        fs::write(&path, "x".repeat(MAX_EDIT_TEXT_BYTES + 1)).expect("oversized text");
+        assert_eq!(read_bounded_text_file(&path), None);
+
+        fs::write(&path, [0xff, 0xfe]).expect("invalid utf8");
+        assert_eq!(read_bounded_text_file(&path), None);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

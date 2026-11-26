@@ -155,8 +155,8 @@ only through a reviewed change to this file.
     search field keeps focus; arrows move the selection. Do not add a focus
     trap.
 32. User-facing text is English and SHOULD be our own wording. Do NOT copy
-    CopyClip's labels, icons, screenshots or other assets. Feature names MUST
-    NOT use another company's trademark.
+    another product's labels, icons, screenshots or other assets. Feature names
+    MUST NOT use another company's trademark.
 33. Keep the list drawing fast and clipped: row lookup by `.get()`, visible
     range only, no per-row allocation of large strings in `drawRect:`.
 34. Do not present partial behaviour as complete. The custom list currently
@@ -184,29 +184,39 @@ asks for one.
 
 ```
 Cargo.toml                       workspace only
-apps/antirustpaste-macos/             implemented AppKit shell
+apps/antirustpaste-macos/             primary AppKit shell
+apps/antirustpaste-mcp/               MCP stdio bridge
+apps/antirustpaste-linux/             GTK4/X11 shell (Linux only)
+crates/antirustpaste-control/         local JSON control protocol
 crates/antirustpaste-core/            platform-neutral domain
 crates/antirustpaste-imaging/         pure-Rust image codec
+crates/antirustpaste-pdf/             pure-Rust image-to-PDF writer
 ```
 
 | Path | Role |
 | --- | --- |
 | `apps/antirustpaste-macos/src/main.rs` | Entry point, `--help`/`--version`, environment documentation |
 | `apps/antirustpaste-macos/src/app.rs` | App delegate, state, polling, hot key, menu/popup/preferences actions, panic guards |
+| `apps/antirustpaste-macos/src/app/control.rs` | Main-thread local control socket and MCP action dispatch |
 | `apps/antirustpaste-macos/src/views.rs` | `NSPanel`, history list, ignored-apps list, preferences window |
 | `apps/antirustpaste-macos/src/pasteboard.rs` | `NSPasteboard` read/write with size and type filters |
 | `apps/antirustpaste-macos/src/paste.rs` | CoreGraphics ⌘V synthesis and Accessibility prompt |
 | `apps/antirustpaste-macos/src/hotkey.rs` | Carbon `RegisterEventHotKey` wrapper and shortcut formatting |
 | `apps/antirustpaste-macos/src/settings.rs` | `NSUserDefaults`, modifier migration, LaunchAgent |
 | `apps/antirustpaste-macos/src/thumbnails.rs` | Boot-cleared cache path and `NSImage` loading |
-| `crates/antirustpaste-core/src/store.rs` | `Clip`/`Captured`, JSON index + blob files, dedup, trim, clear |
+| `apps/antirustpaste-mcp/src/main.rs` | MCP stdio server, tool schemas and control-socket client use |
+| `apps/antirustpaste-linux/src/` | GTK4/X11 shell; no MCP bridge yet |
+| `crates/antirustpaste-control/src/lib.rs` | JSON-line control types, socket path, client and base64 |
+| `crates/antirustpaste-core/src/store.rs` | `Clip`/`Captured`, JSON index + blob files, dedup, trim, clear scopes, storage usage |
 | `crates/antirustpaste-core/src/settings.rs` | Platform-neutral `Settings`, `IgnoredApp`, `Modifiers` |
 | `crates/antirustpaste-core/src/filter.rs` | `Section` and `filter_indices` |
 | `crates/antirustpaste-core/src/thumbnails.rs` | Thumbnail worker, cache, prune/clear |
 | `crates/antirustpaste-imaging` | Pure-Rust image metadata and thumbnail generation |
+| `crates/antirustpaste-pdf` | Pure-Rust PDF writer for image export |
 | `docs/platforms.md` | What exists per platform and what to implement next |
+| `docs/mcp.md` | MCP bridge, tool list, configuration and safety |
 | `assets/` | Highlighter app/status icon; provenance in `assets/README.md` |
-| `docs/` | Architecture, behaviour, development, testing, decisions, agent playbook |
+| `docs/` | Architecture, behaviour, development, testing, decisions, MCP, agent playbook |
 | `THIRD_PARTY.md` | Dependency licences |
 | `scripts/` | `check.sh` (fmt, clippy, tests) and `smoke.sh` (isolated launch) |
 | `packaging/Info.plist` | Bundle metadata for `make-app.sh` |
@@ -215,7 +225,8 @@ crates/antirustpaste-imaging/         pure-Rust image codec
 
 - `./scripts/check.sh` — `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
 - `./scripts/smoke.sh` — builds if needed and starts the app with throwaway data paths. Add
-  `ANTIRUSTPASTE_SMOKE_PREFS=1`, `ANTIRUSTPASTE_SMOKE_PANEL=1` or `ANTIRUSTPASTE_SMOKE_IMAGES=1` to open a surface.
+  `ANTIRUSTPASTE_SMOKE_PREFS=1`, `ANTIRUSTPASTE_SMOKE_PANEL=1`,
+  `ANTIRUSTPASTE_SMOKE_IMAGES=1` or `ANTIRUSTPASTE_SMOKE_COMMANDS=1` to open a surface.
 - `./make-app.sh` — release build and ad-hoc-signed `dist/AntiRustPaste.app`.
 
 **Environment overrides**
@@ -223,19 +234,22 @@ crates/antirustpaste-imaging/         pure-Rust image codec
 | Variable | Effect |
 | --- | --- |
 | `ANTIRUSTPASTE_DATA_DIR` | History directory (index + `blobs/`) |
+| `ANTIRUSTPASTE_CONTROL_SOCKET` | Absolute path for the local MCP control socket |
 | `ANTIRUSTPASTE_DEFAULTS_SUITE` | `NSUserDefaults` suite instead of the standard domain |
 | `ANTIRUSTPASTE_LAUNCH_AGENT_DIR` | Directory for `com.rustclip.app.plist` |
 | `ANTIRUSTPASTE_THUMB_CACHE_DIR` | Absolute, dedicated thumbnail cache directory (default `/tmp`, boot-cleared) |
+| `ANTIRUSTPASTE_SHELL_HISTORY_DIR` | Directory holding synthetic `.zsh_history`/`.bash_history` |
+| `ANTIRUSTPASTE_DISABLE_UPDATE_CHECK=1` | Skip the GitHub release check (tests, smoke runs) |
 | `ANTIRUSTPASTE_OPEN_PREFS=1` | Open Preferences after launch (automation) |
 | `ANTIRUSTPASTE_OPEN_PANEL=1` | Open the history popup after launch (automation) |
 | `ANTIRUSTPASTE_OPEN_IMAGES=1` | Start the popup on the Images tab (automation) |
+| `ANTIRUSTPASTE_OPEN_COMMANDS=1` | Start the popup on the Commands tab (automation) |
 
 **Known gaps**
 
-- Pinned clippings are implemented in the macOS shell; the row context menu is
-  still a follow-up (use `⌘P`).
-- PDF export from selected images is planned; see `ROADMAP.md`.
-- Windows and Linux shells are not implemented; see `docs/platforms.md`.
+- Windows has no shell. The Linux GTK4/X11 shell exists in the tree but was not
+  verified on the macOS host used for this documentation; it lacks MCP control,
+  scoped clears and the tray recording toggle. See `docs/platforms.md`.
 - No per-row accessibility elements in the custom-drawn history list.
 - The Images tab is a compact list, not a grid.
 - The first Images draw may show an `IMG` placeholder while the background

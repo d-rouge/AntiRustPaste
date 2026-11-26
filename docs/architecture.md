@@ -1,6 +1,6 @@
 # Architecture
 
-> Last reviewed: 2026-11-26 · Version 0.3.3
+> Last reviewed: 2026-11-26 · Version 0.4.0
 
 AntiRustPaste is a single-process macOS accessory app. AppKit runs the main loop and
 a repeating `NSTimer` polls the pasteboard. There is no webview, database engine
@@ -8,15 +8,23 @@ or async runtime. One background worker exists for thumbnails: it reads blobs,
 decodes them with `antirustpaste-imaging` and writes cache files; it never touches
 AppKit or `AppState`.
 
-The only network access is the update check: `NSURLSession` data tasks for the
-GitHub Releases API, `SHA256SUMS.txt` and the universal zip. They use a session
-whose delegate queue is the main queue, so every callback stays on the AppKit
-thread and runs through a panic guard. The app never checks for updates in a
+The app's only own network requests are for the update check: `NSURLSession`
+data tasks for the GitHub Releases API, `SHA256SUMS.txt` and the universal zip.
+They use a session whose delegate queue is the main queue, so every callback
+stays on the AppKit thread and runs through a panic guard. HTML Quick Look
+previews are rendered by the system panel, which may load resources the
+document references; the app itself never fetches them. The app never checks for updates in a
 `target/` build or in tests; `ANTIRUSTPASTE_DISABLE_UPDATE_CHECK=1` turns it off.
+The MCP control bridge is local-only and never opens a network connection.
 
 The repository is a Cargo workspace:
 
-- `apps/antirustpaste-macos` — the implemented AppKit shell;
+- `apps/antirustpaste-macos` — the primary AppKit shell;
+- `apps/antirustpaste-mcp` — the MCP stdio bridge for the macOS shell;
+- `apps/antirustpaste-linux` — a GTK4/X11 shell that builds on Linux but was not
+  exercised on the macOS host used for this documentation;
+- `crates/antirustpaste-control` — the local JSON control protocol, socket path
+  and client shared by the app and the MCP bridge;
 - `crates/antirustpaste-core` — platform-neutral model, storage, settings, filtering
   and thumbnail worker;
 - `crates/antirustpaste-imaging` — a pure-Rust, `#![forbid(unsafe_code)]` codec with
@@ -24,7 +32,7 @@ The repository is a Cargo workspace:
 - `crates/antirustpaste-pdf` — a pure-Rust, `#![forbid(unsafe_code)]` PDF writer for
   the image export, with no AppKit, filesystem or environment access.
 
-Future Windows/Linux shells are `apps/antirustpaste-<os>`. They depend on core; core
+Future Windows shells are `apps/antirustpaste-<os>`. They depend on core; core
 never depends on a shell. See [platforms.md](platforms.md).
 
 ## Module map
@@ -39,8 +47,12 @@ never depends on a shell. See [platforms.md](platforms.md).
 | `apps/antirustpaste-macos/src/hotkey.rs` | Carbon `RegisterEventHotKey` wrapper and shortcut formatting |
 | `apps/antirustpaste-macos/src/settings.rs` | `NSUserDefaults` keys, modifier migration, LaunchAgent management |
 | `apps/antirustpaste-macos/src/thumbnails.rs` | Boot-cleared cache path, private directory policy, `NSImage` loading |
+| `apps/antirustpaste-macos/src/app/control.rs` | Non-blocking private Unix socket, request dispatch and MCP actions on the main thread |
+| `apps/antirustpaste-linux/src/` | GTK4/X11 shell: tray, popup, clipboard, X11 hot key/paste, XDG settings; no MCP bridge |
 | `apps/antirustpaste-macos/src/update.rs` | Release JSON/version/checksum parsing, bundle detection and the detached install script (no AppKit) |
-| `crates/antirustpaste-core/src/store.rs` | `Clip`/`Captured`, JSON index, blob files, dedup, trim, command upsert, clear, previews, relative time |
+| `apps/antirustpaste-mcp/src/main.rs` | MCP stdio server, tool schemas and forwarding to the control socket |
+| `crates/antirustpaste-control/src/lib.rs` | JSON-line request/response types, socket path, client and base64 helper |
+| `crates/antirustpaste-core/src/store.rs` | `Clip`/`Captured`, JSON index, blob files, dedup, trim, command upsert, clear scopes, storage usage, previews, titles, text edits, relative time |
 | `crates/antirustpaste-core/src/settings.rs` | Platform-neutral `Settings`, `IgnoredApp`, `Modifiers` bits |
 | `crates/antirustpaste-core/src/filter.rs` | `Section` (Text/Images/Commands) and search filtering |
 | `crates/antirustpaste-core/src/shell_history.rs` | zsh/bash history parsing, bounded tail/delta reads, cursor sidecar |
@@ -72,8 +84,9 @@ main
                 ├── record the initial pasteboard changeCount
                 ├── NSStatusItem + status menu
                 ├── build popup panel, search field, list, footer, panel delegate
+                ├── bind the private MCP control socket (failure only disables MCP)
                 ├── install AppState in the thread-local (starts the thumbnail worker)
-                ├── install key monitor, 1 s pasteboard poll and 0.1 s thumbnail drain
+                ├── install key monitor, 1 s pasteboard poll and 0.1 s thumbnail/control timer
                 ├── register the Carbon hot key
                 └── optional automation hooks (ANTIRUSTPASTE_OPEN_*)
 ```
@@ -224,15 +237,39 @@ and full-screen-auxiliary behaviour. Its content is an `NSVisualEffectView`
 segmented control switches between **Text**, **Images** and **Commands**;
 ⌘⇧1/⌘⇧2/⌘⇧3 do the same, while ⌘1…⌘9 choose the Nth visible row of the active
 tab. The search field is the first responder, and a local key monitor handles
-arrows, Enter, Escape, Delete, ⌘⇧1–3, ⌘1–9, ⌘C, ⌘P, ⌘E and ⌘R before AppKit's
-responder chain. The footer holds **Clear Text** and **Clear Images** buttons;
-each calls `Store::remove_where` for its section and then prunes thumbnails.
-There is no **Clear Commands** button: commands are deleted row by row and
-**Clear All Clippings** keeps them. On the Images
-tab it also holds **PDF…**, which opens the export window, and the footer hint
-switches to `⌘E PDF`. On the Commands tab it holds **Refresh**, and the hint
-switches to `⌘R refresh`. `⌘P` toggles the pin of the selected row; pinned rows draw
-a tilting accent SF Symbol pin inside a rounded card under a **PINNED** header.
+arrows, Enter, Escape, Delete, ⌘⇧1–3, ⌘1–9, ⌘C, ⌘P, ⌘⇧R, ⌘E and ⌘R before
+AppKit's responder chain. The footer holds **Clear All** and **Clear Unpinned**
+buttons on the Text and Images tabs; each maps the active tab plus the pin rule
+to a core `ClearScope` and then prunes thumbnails. The action buttons form a
+right-aligned cluster: **PDF…** (Images), **Clear All** and **Clear Unpinned**
+share the right edge, and **Refresh** alone is right-aligned on Commands. There
+is no clear action on the Commands tab: commands are deleted row by row and
+every clipping clear keeps them. On the Images tab the footer also holds
+**PDF…**, which opens the export window, and the footer hint switches to
+`⌘E PDF`. On the Commands tab it holds **Refresh**, and the hint switches to
+`⌘R refresh`. `⌘P` toggles the pin of the selected row; the row’s
+right-side marker is a hollow circle until pinned and fills when pinned. Pinned
+rows sit in a rounded card under a **PINNED** header. The card uses the
+configured background colour as a soft tint, and the filled marker uses the
+configured marker colour; the defaults are a warm-yellow card and a deep violet
+marker, stored in `NSUserDefaults`.
+Right-clicking a row opens an `NSMenu` for that row (pin/unpin, copy, paste
+when auto-paste is enabled, rename, Quick Look, delete). Items carry the clip id
+in `representedObject`, so the action looks the clip up again after the nested
+menu run loop returns; the selection and scroll are untouched when the menu is
+dismissed. Renaming uses an
+`NSAlert` accessory field and stores an optional, bounded title in core. A titled
+row draws the title followed by an **Edited** badge with a pencil and keeps the
+source-app icon, app name and time on the subtitle line, so the name cannot crowd
+out the row metadata. The list view resolves icons for the visible rows before drawing
+and installs an `NSTrackingArea` for a subtle hover highlight. After a short
+dwell it opens a non-activating floating callout with the original content plus
+`source · kind · size` and the same source-app icon. Icons are resolved by
+bundle identifier through `NSWorkspace` and cached in `AppState`. The callout
+reuses a single lazily built `NSPanel`; it ignores mouse events and is ordered
+out when the hover changes, the popup hides, or another surface opens. The
+history panel suppresses its resign-key hide while the menu is open and re-keys
+the search field afterwards.
 `ListLayout` (in `app.rs`) owns the row geometry: header heights, group
 offsets, the pinned card, hit-testing and the visible range. Drawing, click
 mapping, scrolling and keyboard navigation all go through it, so headers are
@@ -248,12 +285,56 @@ Preferences are a regular `NSWindow` with an `NSTabView`:
 
 - **General** — max items per section, record toggle, confirm-before-delete,
   start at login, shortcut recorder.
+- **Appearance** — pinned-row background and marker colour wells.
 - **Exceptions** — ignored apps in an `NSScrollView` with a custom list view and
   Add/Remove buttons.
+- **History** — counts plus scoped delete actions backed by the core
+  `ClearScope` rules: everything, images, text, unpinned images and unpinned
+  text. It also reports disk usage for the history directory (index, blobs and
+  sidecars) and the temporary thumbnail/preview cache. `Store::storage_usage`
+  and `thumbnails::cache_usage_bytes` bound their directory reads and never
+  follow symlinks. Terminal commands are never included; the tab is reached
+  through Preferences and has no separate status-menu item. The same recording
+  flag is exposed by the status menu as **Pause Recording** / **Resume
+  Recording**; both entry points call `set_recording`, which saves the setting
+  and updates the checkbox and menu title without holding a state borrow across
+  AppKit.
 
 The preferences window is built lazily on first open and kept alive in
 `AppState::prefs`; the panel delegate is stored separately because AppKit
 delegates are not retained.
+
+## MCP control
+
+```
+MCP client
+ └── antirustpaste-mcp (stdio, JSON-RPC)
+      └── control::call -> <data>/control.sock (0600)
+           └── app/control.rs poll on the 0.1 s timer
+                ├── read one JSON line per request
+                ├── dispatch on the main thread with with_state
+                ├── reuse the same actions as menus and keyboard
+                └── queue a JSON line response
+```
+
+The app binds a non-blocking `UnixListener` in its data directory. The path can
+be moved with `ANTIRUSTPASTE_CONTROL_SOCKET`, but only an absolute path is
+accepted. A stale socket is removed only when the existing file is a Unix
+socket; any other file disables control instead of being replaced. The socket is
+mode `0600` and there is no TCP listener.
+
+`crates/antirustpaste-control` owns the request/response types, socket discovery
+and the client used by `apps/antirustpaste-mcp`. The MCP bridge owns only the MCP
+tool schemas and JSON-RPC envelope; it never opens history files. The app's
+`app/control.rs` owns the actions and reuses `Store`, settings, pasteboard,
+Quick Look, PDF and UI helpers, so MCP and the UI share one state.
+
+`ControlServer::poll` collects requests first, then each request is dispatched
+after the `with_state` borrow is dropped, and responses are queued afterwards.
+This is the same re-entrancy rule as AppKit callbacks and menu tracking. The
+listener and connections are non-blocking; output is buffered per connection and
+flushed on later timer ticks. Requests are capped at 1 MiB and responses at
+16 MiB. No new thread, dispatch queue or blocking sleep is introduced.
 
 ## Images and thumbnails
 
@@ -339,30 +420,81 @@ PDF window
 ## Quick Look preview
 
 ```
-Space (Images tab, empty query) / ⌘Y
-  └── app::toggle_image_preview
+Space (any tab, empty query) / ⌘Y
+  └── app::toggle_quick_look (row menu: toggle_preview_for_clip)
        ├── shared QLPreviewPanel already visible -> close and clean up
-       ├── read the selected clip's original blob
-       ├── write <thumb cache>/previews/preview-<hash>.<ext> (dir 0700, file 0600)
+       ├── preview_source_for_clip
+       │    ├── text / command <= 1 MiB -> TextBytes, stable preview-<id>.txt
+       │    ├── text / command > 1 MiB  -> hash-named .txt, read-only
+       │    ├── rich text      -> stored blob as "rtf"; RTFD uses its plain fallback
+       │    ├── HTML           -> stored blob as "html"
+       │    ├── image          -> stored blob, extension from imaging::info
+       │    └── file           -> the existing target NSURL, no copy
+       ├── temporary kinds: write <thumb cache>/previews/... (0700 dir, 0600 file)
+       ├── editable text: watch the file (at most 8 watched paths)
        ├── panel.dataSource/delegate = AppDelegate; reloadData
        └── makeKeyAndOrderFront
 QLPreviewPanel
   ├── numberOfPreviewItemsInPreviewPanel:  -> 1
-  ├── previewPanel:previewItemAtIndex:     -> the file NSURL
+  ├── previewPanel:previewItemAtIndex:     -> the file or target NSURL
   └── previewPanel:handleEvent:            -> Space/Esc close the preview
-1 s poll / close
-  └── finish_closed_preview: delete the file, clear the data source, and give
-      the popup key back when the app is still active
+1 s poll
+  ├── poll_edited_text_previews: metadata changed?
+  │    └── read <= 1 MiB -> Store::set_text -> save -> refresh_ui
+  └── finish_closed_preview: delete an unwatched temporary file, clear the data
+      source, and give the popup key back when the app is still active
 ```
 
 - `QLPreviewPanel` is the system Quick Look singleton (QuickLookUI), so the
-  preview looks and behaves like Finder's. `NSURL` itself conforms to
-  `QLPreviewItem`, so no custom preview-item class is needed.
+  preview looks and behaves like Finder's for every supported kind. `NSURL`
+  itself conforms to `QLPreviewItem`, so no custom preview-item class is needed.
+- `can_preview_clip` decides the row-menu enablement cheaply: text is present,
+  the blob file exists, or a `File` target is an absolute existing file or
+  directory. `preview_source_for_clip` does the actual blob read when the panel
+  opens; every read keeps the `Store` bounds.
+- A `File` clip points Quick Look at the real target instead of copying it, so
+  folders, PDFs, videos and other system-previewable files work without a blob
+  in the history.
+- Editable text uses one stable file per clip, so Quick Look's **Open with
+  TextEdit** and later previews address the same path. `poll_edited_text_previews`
+  compares mtime and length, reads with a `MAX_EDIT_TEXT_BYTES + 1` cap and calls
+  `Store::set_text`. Empty, invalid UTF-8 and oversized saves are skipped;
+  duplicates beep and leave the clip untouched.
+- Watched text files are not deleted when Quick Look closes because TextEdit may
+  still hold them. They live in the boot-cleared preview directory, at most
+  eight are watched, and the oldest is removed when the watch list overflows.
+  **Clear Thumbnail Cache** also clears them. Unwatched previews are deleted as
+  before; real file targets are never deleted.
 - The popup normally hides when it resigns key; `schedule_hide_from_resign`
   skips that while the Quick Look panel is visible, and closing the preview
   re-keys the popup. If the user switched apps instead, the popup hides.
-- Preview files live beside the thumbnails so they are boot-cleared, and the
-  directory is reset at launch and removed on quit.
+
+## Editing clip text
+
+```
+row menu Edit Text… / ⌘⇧E
+  └── app::edit_selected -> edit_clip
+       ├── allow only ClipKind::Text and ClipKind::Command
+       ├── reject current text > MAX_EDIT_TEXT_BYTES with an alert
+       ├── NSAlert + NSScrollView/NSTextView, Save/Cancel
+       └── after runModal (no state borrow held)
+            └── Store::set_text(index, text)
+                 ├── Empty / TooLarge / Duplicate -> alert or beep
+                 ├── Ok(false) -> unchanged
+                 └── Ok(true) -> save, refresh_ui
+```
+
+- `Store::set_text` lives in core so the hash, preview and dedup rules are
+  testable without AppKit. It preserves id, kind, source metadata, date, title
+  and pin; it recomputes preview, `byte_len` and hash, and refuses a text that
+  already exists on another clip.
+- The editor is a modal `NSAlert` with a scrollable `NSTextView`. It is reached
+  from a panic-guarded action or key monitor, and the state borrow is released
+  before `runModal`, as required for all re-entrant AppKit calls.
+- The text view is built once per invocation and bounded by the core limit; no
+  new thread, worker or persistent window is added.
+- The clipboard is untouched until the row is copied again. Command rows can be
+  edited too, but a shell-history refresh may re-add the original command.
 
 ## Storage
 
@@ -381,10 +513,14 @@ shell-history.json  zsh/bash byte offset + fingerprint (no command text)
 ```
 
 `Clip` fields: `id`, `kind`, `preview`, `text`, `data_type`, `blob`, `byte_len`,
-`width`, `height`, `source_name`, `source_bundle`, `date_ms`, `hash`, `pinned`.
-Image dimensions and `pinned` are optional/defaulted for older histories. The
+`width`, `height`, `source_name`, `source_bundle`, `date_ms`, `hash`, `title`,
+`pinned`. Image dimensions, `title` and `pinned` are optional/defaulted for older
+histories. The
 vector is maintained pinned-first; `Store::trim` removes only unpinned clips and
-`Store::set_pinned` moves a clip into the matching group. A shell command is a
+`Store::set_pinned` moves a clip into the matching group. `ClearScope` is the
+platform-neutral rule used by the footer and the Preferences History tab:
+`Everything`, `Text`, `Images`, `UnpinnedText` and `UnpinnedImages`, none of
+which ever match a command. A shell command is a
 `Clip` with `kind: command`, the command in `text`, the shell in `source_name`
 and no blob; `Store::upsert_command` dedups by command text. Trimming keeps
 independent budgets for command and non-command records.
@@ -440,6 +576,11 @@ combination; the previous shortcut is restored.
 | Image decode failure | `IMG` placeholder in the Images tab; the clip is still pasteable |
 | Thumbnail worker cannot start | no thumbnails; the rest of the app works and failures stay non-fatal |
 | Thumbnail cache unwritable | `IMG` placeholder; history is unaffected |
+| Quick Look source missing or unreadable | beep; no temporary file; the popup keeps focus |
+| Quick Look file target gone | the row-menu item is disabled and ⌘Y beeps |
+| Edited text is empty, oversized or a duplicate | not imported; the stored clip is unchanged |
+| Watched preview file disappears | its watch is dropped; no alert |
+| Text preview cache cleared while TextEdit is open | the temporary file is removed; TextEdit keeps its in-memory copy |
 | Shell history file missing/unreadable | Commands tab stays empty; no alert |
 | Shell history file truncated or rewritten | re-read as a tail; stored entries keep their order |
 | Shell history cursor corrupt | ignored; the next read starts from the tail |

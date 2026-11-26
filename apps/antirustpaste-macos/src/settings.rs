@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use antirustpaste_core::{IgnoredApp, Modifiers, Settings};
+use antirustpaste_core::{IgnoredApp, Modifiers, Rgb, Settings};
 use objc2::AnyThread;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -19,6 +19,8 @@ const K_KEYCODE: &str = "hotkeyKeyCode";
 const K_MODIFIERS: &str = "hotkeyModifiers";
 const K_DISPLAY: &str = "hotkeyDisplay";
 const K_HOTKEY_ENABLED: &str = "hotkeyEnabled";
+const K_PINNED_BACKGROUND: &str = "pinnedBackgroundColor";
+const K_PINNED_INDICATOR: &str = "pinnedIndicatorColor";
 
 // Legacy NSEventModifierFlags stored by earlier builds. New values use
 // `antirustpaste_core::Modifiers` bits (shift/control/option/command = 1/2/4/8).
@@ -45,6 +47,10 @@ pub fn load() -> Settings {
         bool_default(&defaults, K_PASTE_AFTER_SELECT, settings.paste_after_select);
     settings.start_at_login = bool_default(&defaults, K_LOGIN, settings.start_at_login);
     settings.hotkey_enabled = bool_default(&defaults, K_HOTKEY_ENABLED, settings.hotkey_enabled);
+    settings.pinned_background =
+        rgb_default(&defaults, K_PINNED_BACKGROUND, settings.pinned_background);
+    settings.pinned_indicator =
+        rgb_default(&defaults, K_PINNED_INDICATOR, settings.pinned_indicator);
 
     let key_key = NSString::from_str(K_KEYCODE);
     if defaults.objectForKey(&key_key).is_some() {
@@ -92,6 +98,14 @@ pub fn save(settings: &Settings) {
     defaults.setInteger_forKey(
         settings.hotkey_modifiers.bits() as isize,
         &NSString::from_str(K_MODIFIERS),
+    );
+    defaults.setInteger_forKey(
+        settings.pinned_background.to_u32() as isize,
+        &NSString::from_str(K_PINNED_BACKGROUND),
+    );
+    defaults.setInteger_forKey(
+        settings.pinned_indicator.to_u32() as isize,
+        &NSString::from_str(K_PINNED_INDICATOR),
     );
 
     let display_obj: Retained<AnyObject> =
@@ -146,6 +160,15 @@ fn bool_default(defaults: &NSUserDefaults, key: &str, fallback: bool) -> bool {
     let key = NSString::from_str(key);
     if defaults.objectForKey(&key).is_some() {
         defaults.boolForKey(&key)
+    } else {
+        fallback
+    }
+}
+
+fn rgb_default(defaults: &NSUserDefaults, key: &str, fallback: Rgb) -> Rgb {
+    let key = NSString::from_str(key);
+    if defaults.objectForKey(&key).is_some() {
+        Rgb::from_u32(defaults.integerForKey(&key).max(0) as u32)
     } else {
         fallback
     }

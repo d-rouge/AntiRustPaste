@@ -12,6 +12,7 @@ use objc2_foundation::{NSString, NSUserDefaults};
 const K_MAX: &str = "maxClips";
 const K_RECORD: &str = "recordClips";
 const K_CONFIRM: &str = "confirmDelete";
+const K_PASTE_AFTER_SELECT: &str = "pasteAfterSelect";
 const K_LOGIN: &str = "startAtLogin";
 const K_IGNORED: &str = "ignoredApps";
 const K_KEYCODE: &str = "hotkeyKeyCode";
@@ -40,6 +41,8 @@ pub fn load() -> Settings {
 
     settings.record = bool_default(&defaults, K_RECORD, settings.record);
     settings.confirm_delete = bool_default(&defaults, K_CONFIRM, settings.confirm_delete);
+    settings.paste_after_select =
+        bool_default(&defaults, K_PASTE_AFTER_SELECT, settings.paste_after_select);
     settings.start_at_login = bool_default(&defaults, K_LOGIN, settings.start_at_login);
     settings.hotkey_enabled = bool_default(&defaults, K_HOTKEY_ENABLED, settings.hotkey_enabled);
 
@@ -73,6 +76,10 @@ pub fn save(settings: &Settings) {
     defaults.setInteger_forKey(settings.max_clips as isize, &NSString::from_str(K_MAX));
     defaults.setBool_forKey(settings.record, &NSString::from_str(K_RECORD));
     defaults.setBool_forKey(settings.confirm_delete, &NSString::from_str(K_CONFIRM));
+    defaults.setBool_forKey(
+        settings.paste_after_select,
+        &NSString::from_str(K_PASTE_AFTER_SELECT),
+    );
     defaults.setBool_forKey(settings.start_at_login, &NSString::from_str(K_LOGIN));
     defaults.setBool_forKey(
         settings.hotkey_enabled,

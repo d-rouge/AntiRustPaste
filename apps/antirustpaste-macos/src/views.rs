@@ -1367,6 +1367,7 @@ pub(crate) struct PrefsParts {
     pub max_label: Retained<NSTextField>,
     pub record_box: Retained<NSButton>,
     pub confirm_box: Retained<NSButton>,
+    pub paste_box: Retained<NSButton>,
     pub login_box: Retained<NSButton>,
     pub shortcut_button: Retained<NSButton>,
     pub ignored_view: Retained<IgnoredAppsView>,
@@ -1407,7 +1408,7 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
     let window = unsafe {
         NSWindow::initWithContentRect_styleMask_backing_defer(
             NSWindow::alloc(mtm),
-            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(500.0, 450.0)),
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(500.0, 478.0)),
             NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
             NSBackingStoreType::Buffered,
             false,
@@ -1421,32 +1422,32 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
     let tabs = NSTabView::new(mtm);
     tabs.setFrame(NSRect::new(
         NSPoint::new(16.0, 16.0),
-        NSSize::new(468.0, 418.0),
+        NSSize::new(468.0, 446.0),
     ));
 
     // ---- General ----
     let general = NSView::new(mtm);
     general.setFrame(NSRect::new(
         NSPoint::new(0.0, 0.0),
-        NSSize::new(468.0, 380.0),
+        NSSize::new(468.0, 408.0),
     ));
 
     general.addSubview(&heading(
         "Clipboard History",
-        NSRect::new(NSPoint::new(16.0, 342.0), NSSize::new(400.0, 18.0)),
+        NSRect::new(NSPoint::new(16.0, 370.0), NSSize::new(400.0, 18.0)),
         mtm,
     ));
 
     general.addSubview(&label(
         "Remember last",
-        NSRect::new(NSPoint::new(16.0, 308.0), NSSize::new(100.0, 20.0)),
+        NSRect::new(NSPoint::new(16.0, 336.0), NSSize::new(100.0, 20.0)),
         13.0,
         mtm,
     ));
 
     let max_field = NSTextField::new(mtm);
     max_field.setFrame(NSRect::new(
-        NSPoint::new(120.0, 304.0),
+        NSPoint::new(120.0, 332.0),
         NSSize::new(64.0, 24.0),
     ));
     max_field.setFont(Some(&NSFont::systemFontOfSize(13.0)));
@@ -1461,14 +1462,14 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
 
     general.addSubview(&label(
         "items",
-        NSRect::new(NSPoint::new(190.0, 308.0), NSSize::new(80.0, 20.0)),
+        NSRect::new(NSPoint::new(190.0, 336.0), NSSize::new(80.0, 20.0)),
         13.0,
         mtm,
     ));
 
     let max_label = secondary_label(
         "Maximum: 200 per section",
-        NSRect::new(NSPoint::new(270.0, 308.0), NSSize::new(190.0, 20.0)),
+        NSRect::new(NSPoint::new(270.0, 336.0), NSSize::new(190.0, 20.0)),
         11.0,
         mtm,
     );
@@ -1483,7 +1484,7 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
         )
     };
     record_box.setFrame(NSRect::new(
-        NSPoint::new(16.0, 272.0),
+        NSPoint::new(16.0, 300.0),
         NSSize::new(420.0, 20.0),
     ));
     general.addSubview(&record_box);
@@ -1497,10 +1498,24 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
         )
     };
     confirm_box.setFrame(NSRect::new(
-        NSPoint::new(16.0, 244.0),
+        NSPoint::new(16.0, 272.0),
         NSSize::new(420.0, 20.0),
     ));
     general.addSubview(&confirm_box);
+
+    let paste_box = unsafe {
+        NSButton::checkboxWithTitle_target_action(
+            &NSString::from_str("Paste after choosing a clipping (requires Accessibility)"),
+            Some(target),
+            Some(sel!(pasteToggled:)),
+            mtm,
+        )
+    };
+    paste_box.setFrame(NSRect::new(
+        NSPoint::new(16.0, 244.0),
+        NSSize::new(436.0, 20.0),
+    ));
+    general.addSubview(&paste_box);
 
     let login_box = unsafe {
         NSButton::checkboxWithTitle_target_action(
@@ -1590,17 +1605,17 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
     let exceptions = NSView::new(mtm);
     exceptions.setFrame(NSRect::new(
         NSPoint::new(0.0, 0.0),
-        NSSize::new(468.0, 380.0),
+        NSSize::new(468.0, 408.0),
     ));
 
     exceptions.addSubview(&heading(
         "Ignored Apps",
-        NSRect::new(NSPoint::new(16.0, 342.0), NSSize::new(400.0, 18.0)),
+        NSRect::new(NSPoint::new(16.0, 370.0), NSSize::new(400.0, 18.0)),
         mtm,
     ));
     exceptions.addSubview(&secondary_label(
         "Clipboard changes copied from these apps are not recorded.",
-        NSRect::new(NSPoint::new(16.0, 316.0), NSSize::new(436.0, 18.0)),
+        NSRect::new(NSPoint::new(16.0, 344.0), NSSize::new(436.0, 18.0)),
         11.0,
         mtm,
     ));
@@ -1616,7 +1631,7 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
 
     let ignored_scroll = NSScrollView::new(mtm);
     ignored_scroll.setFrame(NSRect::new(
-        NSPoint::new(16.0, 88.0),
+        NSPoint::new(16.0, 116.0),
         NSSize::new(436.0, 216.0),
     ));
     ignored_scroll.setBorderType(NSBorderType::NoBorder);
@@ -1635,7 +1650,7 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
         )
     };
     add_button.setFrame(NSRect::new(
-        NSPoint::new(16.0, 48.0),
+        NSPoint::new(16.0, 76.0),
         NSSize::new(110.0, 30.0),
     ));
     exceptions.addSubview(&add_button);
@@ -1649,14 +1664,14 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
         )
     };
     remove_button.setFrame(NSRect::new(
-        NSPoint::new(134.0, 48.0),
+        NSPoint::new(134.0, 76.0),
         NSSize::new(100.0, 30.0),
     ));
     exceptions.addSubview(&remove_button);
 
     exceptions.addSubview(&secondary_label(
         "Use Add App… to choose an application.",
-        NSRect::new(NSPoint::new(16.0, 18.0), NSSize::new(436.0, 18.0)),
+        NSRect::new(NSPoint::new(16.0, 46.0), NSSize::new(436.0, 18.0)),
         11.0,
         mtm,
     ));
@@ -1681,6 +1696,7 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
         max_label,
         record_box,
         confirm_box,
+        paste_box,
         login_box,
         shortcut_button,
         ignored_view,

@@ -84,15 +84,16 @@ Legend: ✅ done, ⬜ not implemented.
 - Menu bar item with the spray-can template icon (tooltip
   `AntiRustPaste — clipboard history`).
 - Left-click toggles the popup; right-click opens the status menu.
-- Popup: search, Text/Images/Commands tabs, keyboard navigation, paste, delete,
-  clear and one-key paste with ⌘1…⌘9.
+- Popup: search, Text/Images/Commands tabs, keyboard navigation, choose/copy,
+  optional paste, delete, clear and one-key choice with ⌘1…⌘9.
 - Shell history: zsh and bash files are read on demand when the Commands tab is
   opened or refreshed; no background watcher.
 - Native pasteboard capture: text, RTF/RTFD, HTML, PNG/TIFF/JPEG images, file
   URLs. Concealed/transient items are skipped.
-- Preferences: max clips, recording, confirmations, login item, shortcut
-  recorder, ignored apps, clear thumbnail cache.
-- Global shortcut through Carbon; paste through CGEvent with Accessibility.
+- Preferences: max clips, recording, confirmations, optional paste after
+  choosing, login item, shortcut recorder, ignored apps, clear thumbnail cache.
+- Global shortcut through Carbon. Copying needs no permission; the optional
+  paste uses CGEvent and Accessibility.
 - Thumbnail cache under `/tmp/AntiRustPaste-<user>-<hash>/thumbnails`, cleared by
   macOS at boot; one worker thread generates thumbnails.
 - Image export to PDF: a dedicated selection window, one A4 page per image,

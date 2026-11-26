@@ -35,7 +35,7 @@ never depends on a shell. See [platforms.md](platforms.md).
 | `apps/antirustpaste-macos/src/app.rs` | `NSApplicationDelegate`, thread-local `AppState`, status item and menu, clipboard polling, on-demand shell history, hot key, keyboard handling, all user actions, panic guards |
 | `apps/antirustpaste-macos/src/views.rs` | Objective-C classes: `RCClipPanel`, `RCClipListView`, `RCIgnoredAppsView`, `RCPanelDelegate`; construction of the popup and Preferences window |
 | `apps/antirustpaste-macos/src/pasteboard.rs` | Reads and writes `NSPasteboard` with type/size limits |
-| `apps/antirustpaste-macos/src/paste.rs` | CoreGraphics ⌘V synthesis and the Accessibility trust prompt |
+| `apps/antirustpaste-macos/src/paste.rs` | Optional CoreGraphics ⌘V synthesis and the Accessibility trust prompt |
 | `apps/antirustpaste-macos/src/hotkey.rs` | Carbon `RegisterEventHotKey` wrapper and shortcut formatting |
 | `apps/antirustpaste-macos/src/settings.rs` | `NSUserDefaults` keys, modifier migration, LaunchAgent management |
 | `apps/antirustpaste-macos/src/thumbnails.rs` | Boot-cleared cache path, private directory policy, `NSImage` loading |
@@ -203,13 +203,16 @@ list row / Enter / menu item
       ├── record the new changeCount so the write is not re-captured
       ├── hide the panel
       ├── activate the target app
-      ├── first time: AXIsProcessTrustedWithOptions prompt
+      ├── stop here unless "Paste after choosing" is enabled
+      ├── first time with the preference on: AXIsProcessTrustedWithOptions prompt
       └── 0.25 s one-shot NSTimer -> CGEvent ⌘V down/up
 ```
 
 The target app is captured when the popup opens (or before the status menu is
 shown), not when the paste happens. If the target quit, `resolve_target_app`
-falls back to the last non-AntiRustPaste frontmost app by bundle id.
+falls back to the last non-AntiRustPaste frontmost app by bundle id. With the
+preference off, `paste_store_index` returns after activating the target, so the
+default path never touches CoreGraphics events or Accessibility.
 
 ## Popup and preferences
 
@@ -219,7 +222,7 @@ and full-screen-auxiliary behaviour. Its content is an `NSVisualEffectView`
 (popover material) with rounded corners. The history rows are drawn by
 `RCClipListView::drawRect:`; only the visible range is painted. An icon-only
 segmented control switches between **Text**, **Images** and **Commands**;
-⌘⇧1/⌘⇧2/⌘⇧3 do the same, while ⌘1…⌘9 paste the Nth visible row of the active
+⌘⇧1/⌘⇧2/⌘⇧3 do the same, while ⌘1…⌘9 choose the Nth visible row of the active
 tab. The search field is the first responder, and a local key monitor handles
 arrows, Enter, Escape, Delete, ⌘⇧1–3, ⌘1–9, ⌘C, ⌘P, ⌘E and ⌘R before AppKit's
 responder chain. The footer holds **Clear Text** and **Clear Images** buttons;

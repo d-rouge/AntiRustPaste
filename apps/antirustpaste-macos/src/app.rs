@@ -703,6 +703,17 @@ define_class!(
             });
         }
 
+        #[unsafe(method(pasteToggled:))]
+        fn paste_toggled(&self, sender: &NSButton) {
+            guard("paste_toggled", || {
+                let on = sender.state() == NSControlStateValueOn;
+                with_state(|s| {
+                    s.settings.paste_after_select = on;
+                    settings::save(&s.settings);
+                });
+            });
+        }
+
         #[unsafe(method(startAtLoginToggled:))]
         fn start_at_login_toggled(&self, sender: &NSButton) {
             guard("start_at_login_toggled", || {
@@ -1371,7 +1382,7 @@ pub(crate) fn handle_list_click(view: &ClipListView, event: &NSEvent) {
     if point.x >= width - 36.0 {
         toggle_pin_at(row);
     } else {
-        paste_filtered(row, true);
+        paste_filtered(row, auto_paste());
     }
 }
 
@@ -1411,7 +1422,12 @@ fn move_selection(delta: isize) {
 
 fn paste_selected() {
     let selected = with_state(|s| s.selected);
-    paste_filtered(selected, true);
+    paste_filtered(selected, auto_paste());
+}
+
+/// Whether choosing a clipping should synthesise ⌘V after copying it.
+fn auto_paste() -> bool {
+    with_state(|s| s.settings.paste_after_select)
 }
 
 fn toggle_pin_selected() {
@@ -1479,12 +1495,12 @@ fn paste_store_index(index: usize, simulate: bool) {
     with_state(|s| s.last_change_count = change_count);
     hide_panel();
 
-    if !simulate {
-        return;
-    }
-
     if let Some(app) = target {
         app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
+    }
+
+    if !simulate {
+        return;
     }
 
     let first_time = with_state(|s| {
@@ -1558,7 +1574,7 @@ pub(crate) fn handle_key_event(event: &NSEvent) -> bool {
                 .to_digit(10)
                 .filter(|digit| (1..=9).contains(digit))
         {
-            paste_filtered(digit as usize - 1, true);
+            paste_filtered(digit as usize - 1, auto_paste());
             return true;
         }
 
@@ -1912,6 +1928,11 @@ fn open_preferences() {
                 NSControlStateValueOff
             });
             prefs.confirm_box.setState(if s.settings.confirm_delete {
+                NSControlStateValueOn
+            } else {
+                NSControlStateValueOff
+            });
+            prefs.paste_box.setState(if s.settings.paste_after_select {
                 NSControlStateValueOn
             } else {
                 NSControlStateValueOff

@@ -16,7 +16,7 @@ are called through small FFI shims.
   cache, generated on a background worker.
 - The **Commands** tab reads zsh and bash history files on demand, when you open
   the tab or press **Refresh** (`⌘R`); it never watches them in the background.
-  Commands support the same live search, pinning and one-key paste as clippings.
+  Commands support the same live search, pinning and one-key choice as clippings.
 - Skips concealed/transient pasteboard items (password managers).
 - Remembers the app a clipping came from and shows it in the list.
 - Re-copying something already in the history moves it to the top instead of
@@ -28,9 +28,10 @@ are called through small FFI shims.
   are grouped under a **PINNED** header in their own card, separate from
   **RECENT**.
 - Global shortcut (⇧⌘V by default, recordable in Preferences) opens the popup.
-- Popup with live search, keyboard navigation, ⏎ to paste, ⌫ to delete, esc to
-  close. Choosing a clipping writes it to the pasteboard, reactivates the
-  previous app and synthesises ⌘V.
+- Popup with live search, keyboard navigation, ⏎ to choose, ⌫ to delete, esc to
+  close. Choosing a clipping writes it to the pasteboard and reactivates the
+  previous app, so you paste it yourself with ⌘V. An optional preference also
+  synthesises ⌘V for you.
 - Status menu with Preferences, Export Images to PDF…, Clear All Clippings
   (clippings and thumbnails; terminal commands are kept), About, Check for
   Updates… and Quit.
@@ -69,8 +70,9 @@ The build is ad-hoc signed but not notarized: on first launch, right-click
 
 - macOS 13 or newer.
 - A Rust toolchain (edition 2024, Rust 1.88+; required by the imaging crate).
-- The Accessibility permission, granted the first time AntiRustPaste tries to paste
-  for you (System Settings → Privacy & Security → Accessibility).
+- The Accessibility permission only if you enable **Paste after choosing a
+  clipping** (off by default): macOS asks the first time AntiRustPaste tries to
+  paste for you. Copy-only use needs no permission.
 
 ## Documentation
 
@@ -147,8 +149,8 @@ before any manual GUI test.
 | --- | --- |
 | ⇧⌘V | Open/close the history popup (recordable) |
 | ↑ / ↓ | Move the selection |
-| ⏎ | Paste the selected clipping |
-| ⌘1 … ⌘9 | Paste the 1st–9th visible row of the active tab |
+| ⏎ | Choose the selected clipping (copies; pastes too if enabled) |
+| ⌘1 … ⌘9 | Choose the 1st–9th visible row of the active tab |
 | ⌘C | Copy the selected clipping without pasting |
 | ⌘P | Pin / unpin the selected clipping |
 | ⌘⇧1 / ⌘⇧2 / ⌘⇧3 | Switch to the Text / Images / Commands tab |
@@ -201,7 +203,7 @@ crates/antirustpaste-imaging/    pure-Rust image metadata and thumbnails
 | `apps/antirustpaste-macos/src/app.rs` | App delegate, state, polling, popup/preferences actions |
 | `apps/antirustpaste-macos/src/views.rs` | Objective-C classes for the popup, list views, preferences |
 | `apps/antirustpaste-macos/src/pasteboard.rs` | Pasteboard reading and writing |
-| `apps/antirustpaste-macos/src/paste.rs` | CoreGraphics ⌘V synthesis, Accessibility prompt |
+| `apps/antirustpaste-macos/src/paste.rs` | Optional CoreGraphics ⌘V synthesis and Accessibility prompt |
 | `apps/antirustpaste-macos/src/hotkey.rs` | Carbon `RegisterEventHotKey` wrapper |
 | `apps/antirustpaste-macos/src/settings.rs` | User defaults, modifier migration, LaunchAgent |
 | `apps/antirustpaste-macos/src/thumbnails.rs` | Boot-cleared cache path and AppKit image loading |
@@ -229,7 +231,8 @@ crates/antirustpaste-imaging/    pure-Rust image metadata and thumbnails
 - Start at login uses a LaunchAgent, not `SMAppService`; moving the app requires
   relaunching it so the plist is rewritten.
 - Self-updates replace the app bundle in place. Because the bundle is ad-hoc
-  signed, macOS may ask for Accessibility approval again after an update; a
+  signed, macOS may ask for Accessibility approval again after an update when
+  automatic pasting is enabled; copy-only use needs no approval. A
   Gatekeeper-translocated copy can only open the release page.
 - A global shortcut already owned by another app must be re-recorded.
 
@@ -237,8 +240,9 @@ crates/antirustpaste-imaging/    pure-Rust image metadata and thumbnails
 
 - Carbon's hot key API is deprecated for UI but is still the supported way to
   register a system-wide shortcut without Accessibility access.
-- Pasting needs Accessibility because AntiRustPaste sends a synthetic ⌘V to the app
-  that was frontmost when the popup opened.
+- Automatic pasting needs Accessibility because AntiRustPaste sends a synthetic
+  ⌘V to the app that was frontmost when the popup opened. Copying never needs
+  it: the default behaviour only writes the pasteboard.
 - Panics in AppKit, timer and Carbon callbacks are caught and logged rather than
   being allowed to abort the process.
 - Thumbnail decoding lives in a pure-Rust crate with `#![forbid(unsafe_code)]`,

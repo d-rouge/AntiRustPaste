@@ -56,6 +56,7 @@ pub struct Settings {
     pub max_clips: usize,
     pub record: bool,
     pub confirm_delete: bool,
+    pub paste_after_select: bool,
     pub start_at_login: bool,
     pub ignored_apps: Vec<IgnoredApp>,
     pub hotkey_keycode: u16,
@@ -70,6 +71,7 @@ impl Default for Settings {
             max_clips: DEFAULT_LIMIT,
             record: true,
             confirm_delete: true,
+            paste_after_select: false,
             start_at_login: false,
             ignored_apps: Vec::new(),
             hotkey_keycode: 9, // V
@@ -131,6 +133,11 @@ mod tests {
         assert!(settings.is_ignored(Some("com.example.alpha")));
         assert!(!settings.is_ignored(Some("com.example.other")));
         assert!(!settings.is_ignored(None));
+    }
+
+    #[test]
+    fn selecting_a_clipping_copies_by_default() {
+        assert!(!Settings::default().paste_after_select);
     }
 
     #[test]

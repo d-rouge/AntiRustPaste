@@ -56,22 +56,24 @@ hot-key crate (extra dependency for the same API).
 functional. The wrapper is isolated in `apps/antirustpaste-macos/src/hotkey.rs` and can be replaced
 without touching app state.
 
-## ADR-004: Synthetic ⌘V through CoreGraphics
+## ADR-004: Optional synthetic ⌘V through CoreGraphics
 
-**Decision.** Write the clip to the pasteboard, activate the previous app, then
+**Decision.** Write the clip to the pasteboard and activate the previous app.
+Only when the **Paste after choosing a clipping** preference is enabled, also
 post a Command-V key down/up with `CGEventPost`.
 
-**Why.** It matches the expected clipboard-manager interaction: the clip lands
-in the focused text field, and apps that handle paste natively keep their own
-behaviour.
+**Why.** Copying is the part that must always work and needs no permission. The
+synthetic paste is convenient for people who want it, but making it optional
+keeps the default install free of the Accessibility prompt and keeps the
+permission from being invalidated by every ad-hoc-signed update.
 
-**Alternatives.** AppleScript/`System Events` keystroke (slow, needs
-Automation), Accessibility API insertion (only text fields, invasive), asking
-the user to press ⌘V (worse UX).
+**Alternatives.** Always synthesise ⌘V (needs Accessibility for everyone),
+AppleScript/`System Events` keystroke (slow, needs Automation), Accessibility
+API insertion (only text fields, invasive), no paste option at all.
 
-**Trade-off.** Requires Accessibility permission and a short delay before
-posting. If permission is missing, the clipboard still updates and the user can
-paste manually.
+**Trade-off.** With the preference on, Accessibility is required and there is a
+short delay before posting. If permission is missing, the clipboard still
+updates and the user can paste manually.
 
 ## ADR-005: LaunchAgent for start at login
 

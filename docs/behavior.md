@@ -140,8 +140,8 @@ when they point at an image.
 | --- | --- |
 | ↑ / ↓ | Move selection one row |
 | Home / End | Move to first / last row |
-| Return / keypad Enter | Paste the selected clipping |
-| ⌘1 … ⌘9 | Paste the 1st–9th visible row of the active tab |
+| Return / keypad Enter | Choose the selected clipping (copy, and paste when enabled) |
+| ⌘1 … ⌘9 | Choose the 1st–9th visible row of the active tab |
 | ⌘C | Write the selected clipping to the clipboard, no synthetic paste |
 | Delete / Forward Delete | Delete the selection when the search field is empty or ⌘ is held |
 | Escape | Close the popup |
@@ -153,7 +153,7 @@ when they point at an image.
 | ⌘R | Re-read the shell history on the Commands tab |
 | Tab / typing | Goes to the search field; the list does not steal text input |
 
-⌘1…⌘9 act on the filtered list of the active tab, so they also paste commands
+⌘1…⌘9 act on the filtered list of the active tab, so they also choose commands
 and images. If fewer rows are visible, the extra digits do nothing.
 
 Space only opens the preview while the search field is empty, so typing a
@@ -161,7 +161,7 @@ space inside a query still inserts it. The key monitor runs before the responder
 chain and only acts while the popup is visible and key. It never consumes keys while another window (Preferences) is
 key.
 
-## 6. Paste
+## 6. Choosing a clipping
 
 1. The selected clip is written to the general pasteboard using its best type:
    text and commands as a string, file as `public.file-url`, rich/image as the
@@ -170,8 +170,10 @@ key.
 3. The popup hides.
 4. The app that was frontmost when the popup opened is activated. If it quit,
    the last non-AntiRustPaste frontmost app is used.
-5. On the first paste attempt the app asks for Accessibility trust.
-6. After 0.25 s a synthetic ⌘V down/up is posted. Without Accessibility the
+5. With **Paste after choosing a clipping** off (the default) the flow ends
+   here: the user pastes with ⌘V.
+6. With the preference on, the first paste attempt asks for Accessibility trust
+   and after 0.25 s a synthetic ⌘V down/up is posted. Without Accessibility the
    clipboard still contains the clip and the user can paste manually.
 
 ## 7. Status menu
@@ -252,6 +254,9 @@ written.
 - **Record clipboard history** — when off, no new clips are stored.
 - **Confirm before deleting** — gates row deletion, clear-all and limit
   reduction.
+- **Paste after choosing a clipping** — off by default. When on, choosing a row
+  also synthesises ⌘V and therefore needs Accessibility; when off, choosing only
+  copies. Changing the switch takes effect immediately.
 - **Start AntiRustPaste at login** — writes/removes the LaunchAgent plist. Failure
   restores the switch and shows an alert.
 - **Global shortcut** — click the button, then press a combination with at least

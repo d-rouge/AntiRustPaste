@@ -1,8 +1,8 @@
 # antirustpaste-macos
 
 The implemented macOS shell. It owns AppKit (`NSStatusItem`, the spray-can template icon, `NSPanel`,
-`NSVisualEffectView`), `NSPasteboard`, Carbon hot keys, CoreGraphics paste,
-Accessibility, `NSUserDefaults` and the LaunchAgent.
+`NSVisualEffectView`), `NSPasteboard`, Carbon hot keys, optional CoreGraphics
+paste with Accessibility, `NSUserDefaults` and the LaunchAgent.
 
 Domain code belongs in `crates/antirustpaste-core`; image decoding belongs in
 `crates/antirustpaste-imaging`. Do not put platform-neutral logic here without a

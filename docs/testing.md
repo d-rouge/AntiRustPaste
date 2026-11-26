@@ -88,7 +88,8 @@ operator's `~/.zsh_history` or `~/.bash_history` into a fixture.
 | 4 | Copy a synthetic text marker | A new row appears within ~1 s, with source app and "just now" |
 | 5 | Copy the same marker again | Row count unchanged, marker moves to the top |
 | 6 | Type part of the marker | List filters live; footer count updates |
-| 7 | Arrow keys + Return | Selected row is written to the clipboard and ⌘V is sent to the previous app |
+| 7 | Arrow keys + Return, default preferences | Selected row is written to the clipboard, popup closes, previous app regains focus, no ⌘V and no Accessibility prompt |
+| 7a | Enable **Paste after choosing a clipping**, then Return | Accessibility prompt once, then ⌘V is sent to the previous app |
 | 8 | ⌘C on a row | Clipboard changes, popup closes, no synthetic paste |
 | 9 | Delete with empty search | Confirmation (if enabled), then row and blob disappear |
 | 10 | Clear All Clippings | Confirmation, clippings and thumbnails removed; terminal commands remain |
@@ -98,11 +99,11 @@ operator's `~/.zsh_history` or `~/.bash_history` into a fixture.
 | 14 | Turn recording off, copy, turn it on | Nothing captured while off; later copies captured |
 | 15 | Open Preferences twice | Same window is reused, no duplicate windows |
 | 16 | Start at login toggle with scratch `ANTIRUSTPASTE_LAUNCH_AGENT_DIR` | Plist created/removed only in the scratch directory |
-| 17 | Copy a PNG/JPEG and a file in Finder | Image appears in Images, the file URL in Text; both paste back |
+| 17 | Copy a PNG/JPEG and a file in Finder | Image appears in Images, the file URL in Text; both can be pasted back |
 | 18 | Copy from a password manager | Concealed item is not captured |
 | 19 | Switch to Images with the segmented control and ⌘⇧2/⌘⇧1 | Tab changes, search placeholder and footer update, selection resets; tooltips name each icon |
 | 19a | Start with synthetic `.zsh_history`/`.bash_history`, open Commands | `zsh`/`bash` rows appear; no `shell-history.json` exists before the tab is opened |
-| 19b | Press ⌘1…⌘9 in each tab | The Nth visible row (after search and pinned grouping) is pasted; with fewer rows the extra digits do nothing |
+| 19b | Press ⌘1…⌘9 in each tab | The Nth visible row (after search and pinned grouping) is chosen; with fewer rows the extra digits do nothing |
 | 19c | Press ⌘⇧1 / ⌘⇧2 / ⌘⇧3 | Text / Images / Commands become active without pasting a row |
 | 19d | Append a synthetic line to the scratch `.zsh_history`, press **Refresh** and ⌘R | Only the new command appears; existing rows do not duplicate |
 | 19e | Truncate or rewrite the scratch history, press Refresh | The tail is re-read without duplicating or mass-reordering stored commands |

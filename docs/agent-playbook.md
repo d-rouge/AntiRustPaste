@@ -1,6 +1,6 @@
 # Agent playbook
 
-> Last reviewed: 2026-11-27 · Version 0.4.1
+> Last reviewed: 2026-11-27 · Version 0.4.2
 
 Practical recipes for working on AntiRustPaste. Read [`../AGENTS.md`](../AGENTS.md)
 first; this file explains *how*, not what the rules are.

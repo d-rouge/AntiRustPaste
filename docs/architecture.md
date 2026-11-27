@@ -1,6 +1,6 @@
 # Architecture
 
-> Last reviewed: 2026-11-27 · Version 0.4.1
+> Last reviewed: 2026-11-27 · Version 0.4.2
 
 AntiRustPaste is a single-process macOS accessory app. AppKit runs the main loop and
 a repeating `NSTimer` polls the pasteboard. There is no webview, database engine

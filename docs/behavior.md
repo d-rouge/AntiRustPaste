@@ -1,6 +1,6 @@
 # Behaviour specification
 
-> Last reviewed: 2026-11-27 · Version 0.4.1
+> Last reviewed: 2026-11-27 · Version 0.4.2
 
 This is the contract the app implements and the specification agents may use.
 Code, labels and assets are AntiRustPaste's own.

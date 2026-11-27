@@ -1,6 +1,6 @@
 # Development
 
-> Last reviewed: 2026-11-27 · Version 0.4.1
+> Last reviewed: 2026-11-27 · Version 0.4.2
 
 ## Prerequisites
 
@@ -115,7 +115,7 @@ product name: crates, the binary, the environment variables and the history
 directory (`~/Library/Application Support/AntiRustPaste`, migrated once from the
 old `RustClip` directory at launch).
 
-`./scripts/make-dmg.sh dist/AntiRustPaste.app 0.4.1` builds the styled installer
+`./scripts/make-dmg.sh dist/AntiRustPaste.app 0.4.2` builds the styled installer
 window from the bundle (Finder automation is required for the icon layout).
 
 `./make-app.sh`:

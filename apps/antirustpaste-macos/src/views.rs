@@ -1924,13 +1924,13 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
 
     general.addSubview(&label(
         "Remember last",
-        NSRect::new(NSPoint::new(16.0, 336.0), NSSize::new(100.0, 20.0)),
+        NSRect::new(NSPoint::new(16.0, 344.0), NSSize::new(100.0, 20.0)),
         13.0,
         mtm,
     ));
 
     let text_max_field = history_limit_field(
-        NSRect::new(NSPoint::new(118.0, 332.0), NSSize::new(50.0, 24.0)),
+        NSRect::new(NSPoint::new(118.0, 340.0), NSSize::new(50.0, 24.0)),
         sel!(textLimitChanged:),
         "Text history limit",
         "How many text clippings to keep. Includes rich text, HTML and file rows.",
@@ -1940,14 +1940,14 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
     );
     general.addSubview(&text_max_field);
     general.addSubview(&label(
-        "text",
-        NSRect::new(NSPoint::new(172.0, 336.0), NSSize::new(30.0, 20.0)),
+        "text clippings",
+        NSRect::new(NSPoint::new(172.0, 344.0), NSSize::new(140.0, 20.0)),
         13.0,
         mtm,
     ));
 
     let images_max_field = history_limit_field(
-        NSRect::new(NSPoint::new(208.0, 332.0), NSSize::new(50.0, 24.0)),
+        NSRect::new(NSPoint::new(118.0, 314.0), NSSize::new(50.0, 24.0)),
         sel!(imagesLimitChanged:),
         "Image history limit",
         "How many images to keep.",
@@ -1958,13 +1958,13 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
     general.addSubview(&images_max_field);
     general.addSubview(&label(
         "images",
-        NSRect::new(NSPoint::new(262.0, 336.0), NSSize::new(42.0, 20.0)),
+        NSRect::new(NSPoint::new(172.0, 318.0), NSSize::new(140.0, 20.0)),
         13.0,
         mtm,
     ));
 
     let commands_max_field = history_limit_field(
-        NSRect::new(NSPoint::new(310.0, 332.0), NSSize::new(50.0, 24.0)),
+        NSRect::new(NSPoint::new(118.0, 288.0), NSSize::new(50.0, 24.0)),
         sel!(commandsLimitChanged:),
         "Command history limit",
         "How many shell commands to keep. The bash default is 500.",
@@ -1975,7 +1975,7 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
     general.addSubview(&commands_max_field);
     general.addSubview(&label(
         "commands",
-        NSRect::new(NSPoint::new(364.0, 336.0), NSSize::new(72.0, 20.0)),
+        NSRect::new(NSPoint::new(172.0, 292.0), NSSize::new(140.0, 20.0)),
         13.0,
         mtm,
     ));
@@ -1989,7 +1989,7 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
         )
     };
     record_box.setFrame(NSRect::new(
-        NSPoint::new(16.0, 300.0),
+        NSPoint::new(16.0, 260.0),
         NSSize::new(420.0, 20.0),
     ));
     general.addSubview(&record_box);
@@ -2003,7 +2003,7 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
         )
     };
     confirm_box.setFrame(NSRect::new(
-        NSPoint::new(16.0, 272.0),
+        NSPoint::new(16.0, 234.0),
         NSSize::new(420.0, 20.0),
     ));
     general.addSubview(&confirm_box);
@@ -2017,7 +2017,7 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
         )
     };
     paste_box.setFrame(NSRect::new(
-        NSPoint::new(16.0, 244.0),
+        NSPoint::new(16.0, 208.0),
         NSSize::new(436.0, 20.0),
     ));
     general.addSubview(&paste_box);
@@ -2031,7 +2031,7 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
         )
     };
     login_box.setFrame(NSRect::new(
-        NSPoint::new(16.0, 216.0),
+        NSPoint::new(16.0, 182.0),
         NSSize::new(420.0, 20.0),
     ));
     general.addSubview(&login_box);
@@ -2039,14 +2039,14 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
     let separator = NSBox::new(mtm);
     separator.setBoxType(NSBoxType::Separator);
     separator.setFrame(NSRect::new(
-        NSPoint::new(16.0, 196.0),
+        NSPoint::new(16.0, 168.0),
         NSSize::new(436.0, 1.0),
     ));
     general.addSubview(&separator);
 
     general.addSubview(&heading(
         "Global Shortcut",
-        NSRect::new(NSPoint::new(16.0, 166.0), NSSize::new(300.0, 18.0)),
+        NSRect::new(NSPoint::new(16.0, 142.0), NSSize::new(300.0, 18.0)),
         mtm,
     ));
 
@@ -2059,28 +2059,28 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
         )
     };
     shortcut_button.setFrame(NSRect::new(
-        NSPoint::new(16.0, 126.0),
+        NSPoint::new(16.0, 104.0),
         NSSize::new(160.0, 30.0),
     ));
     general.addSubview(&shortcut_button);
 
     general.addSubview(&secondary_label(
         "Click to record a new shortcut",
-        NSRect::new(NSPoint::new(188.0, 132.0), NSSize::new(260.0, 18.0)),
+        NSRect::new(NSPoint::new(188.0, 110.0), NSSize::new(260.0, 18.0)),
         11.0,
         mtm,
     ));
 
     general.addSubview(&secondary_label(
         "History is stored in ~/Library/Application Support/AntiRustPaste",
-        NSRect::new(NSPoint::new(16.0, 88.0), NSSize::new(436.0, 18.0)),
+        NSRect::new(NSPoint::new(16.0, 76.0), NSSize::new(436.0, 18.0)),
         11.0,
         mtm,
     ));
 
     general.addSubview(&secondary_label(
         "Click the menu bar icon or use the shortcut to open the history.",
-        NSRect::new(NSPoint::new(16.0, 64.0), NSSize::new(436.0, 18.0)),
+        NSRect::new(NSPoint::new(16.0, 52.0), NSSize::new(436.0, 18.0)),
         11.0,
         mtm,
     ));
@@ -2094,14 +2094,14 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
         )
     };
     cache_button.setFrame(NSRect::new(
-        NSPoint::new(16.0, 24.0),
+        NSPoint::new(16.0, 18.0),
         NSSize::new(176.0, 30.0),
     ));
     general.addSubview(&cache_button);
 
     general.addSubview(&secondary_label(
         "Temporary previews; safe to delete.",
-        NSRect::new(NSPoint::new(202.0, 30.0), NSSize::new(250.0, 18.0)),
+        NSRect::new(NSPoint::new(202.0, 24.0), NSSize::new(250.0, 18.0)),
         11.0,
         mtm,
     ));

@@ -1,6 +1,6 @@
 # Platforms
 
-> Last reviewed: 2026-11-27 · Version 0.4.1
+> Last reviewed: 2026-11-27 · Version 0.4.2
 
 AntiRustPaste is structured so the domain works on any desktop OS, while each OS
 has its own native shell. macOS is the primary, fully exercised implementation.

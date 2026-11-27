@@ -1,6 +1,6 @@
 # Testing
 
-> Last reviewed: 2026-11-27 · Version 0.4.1
+> Last reviewed: 2026-11-27 · Version 0.4.2
 
 AntiRustPaste's primary shell is a macOS GUI app, but most of its logic is
 testable without a screen. The Linux shell shares the same core. The goal is

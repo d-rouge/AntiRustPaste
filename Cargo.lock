@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "antirustpaste"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "antirustpaste-control",
  "antirustpaste-core",
@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "antirustpaste-linux"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "antirustpaste-core",
  "antirustpaste-imaging",

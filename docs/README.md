@@ -23,7 +23,7 @@ agent rules are in [`../AGENTS.md`](../AGENTS.md). Tool-specific entry points
 The user-facing overview, requirements and keyboard map live in
 [`../README.md`](../README.md).
 
-## Current status (0.4.1)
+## Current status (0.4.2)
 
 Structure: workspace with `apps/antirustpaste-macos`, `apps/antirustpaste-mcp`,
 `apps/antirustpaste-linux`, `crates/antirustpaste-control`,

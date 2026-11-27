@@ -1,6 +1,6 @@
 # Roadmap
 
-> Last reviewed: 2026-11-27 · Current release: 0.4.1
+> Last reviewed: 2026-11-27 · Current release: 0.4.2
 
 This file records planned features. The implemented behaviour is in
 [docs/behavior.md](docs/behavior.md); platform status is in
@@ -68,8 +68,9 @@ the port exists.
 - Text, images and commands have separate budgets: `max_text` (default 200),
   `max_images` (default 200) and `max_commands` (default 500, the bash
   `HISTSIZE` default). Trimming one group no longer deletes rows from another.
-- Preferences shows three fields. A value is committed on Return **and** when the
-  field loses focus, so clicking elsewhere or closing the window keeps it.
+- Preferences shows three fields, one under the other. A value is committed on
+  Return **and** when the field loses focus, so clicking elsewhere or closing
+  the window keeps it.
 - A reduction below the current count asks for confirmation when confirmations
   are on, then trims the oldest unpinned rows in that group only.
 - An older shared `maxClips` becomes the text and image limit; commands keep the

@@ -289,7 +289,7 @@ pub(crate) struct AppState {
     pub panel_delegate: Retained<PanelDelegate>,
     pub prefs: Option<PrefsParts>,
     pub pdf_export: Option<PdfExportState>,
-    /// Local JSON control socket used by the MCP bridge.
+    /// Local loopback HTTP control endpoint used by the MCP bridge.
     pub control: Option<control::ControlServer>,
     /// File URL handed to the shared Quick Look panel; `None` when it is closed.
     pub preview_item: Option<Retained<NSURL>>,
@@ -568,6 +568,47 @@ define_class!(
                 }
             });
         }
+
+        #[unsafe(method(controlTextDidEndEditing:))]
+        fn control_text_did_end_editing(&self, notification: &NSNotification) {
+            guard("control_text_did_end_editing", || {
+                let Some(object) = notification.object() else {
+                    return;
+                };
+                let field = with_state(|s| {
+                    let prefs = s.prefs.as_ref()?;
+                    let pointer = Retained::as_ptr(&object);
+                    let section = if pointer
+                        == Retained::as_ptr(&prefs.text_max_field) as *const AnyObject
+                    {
+                        Section::Text
+                    } else if pointer
+                        == Retained::as_ptr(&prefs.images_max_field) as *const AnyObject
+                    {
+                        Section::Images
+                    } else if pointer
+                        == Retained::as_ptr(&prefs.commands_max_field) as *const AnyObject
+                    {
+                        Section::Commands
+                    } else {
+                        return None;
+                    };
+                    let field = match section {
+                        Section::Text => prefs.text_max_field.clone(),
+                        Section::Images => prefs.images_max_field.clone(),
+                        Section::Commands => prefs.commands_max_field.clone(),
+                    };
+                    Some((section, field))
+                });
+                if let Some((section, field)) = field {
+                    // Commit on focus loss as well as on Return. NSTextField only
+                    // sends its action for Return, so without this the typed
+                    // value would be silently lost when another control is
+                    // clicked.
+                    history_limit_changed(&field, section);
+                }
+            });
+        }
     }
 
     unsafe impl NSSearchFieldDelegate for AppDelegate {}
@@ -752,10 +793,24 @@ define_class!(
             });
         }
 
-        #[unsafe(method(maxClipsChanged:))]
-        fn max_clips_changed(&self, sender: &NSTextField) {
-            guard("max_clips_changed", || {
-                max_clips_changed(sender);
+        #[unsafe(method(textLimitChanged:))]
+        fn text_limit_changed(&self, sender: &NSTextField) {
+            guard("text_limit_changed", || {
+                history_limit_changed(sender, Section::Text);
+            });
+        }
+
+        #[unsafe(method(imagesLimitChanged:))]
+        fn images_limit_changed(&self, sender: &NSTextField) {
+            guard("images_limit_changed", || {
+                history_limit_changed(sender, Section::Images);
+            });
+        }
+
+        #[unsafe(method(commandsLimitChanged:))]
+        fn commands_limit_changed(&self, sender: &NSTextField) {
+            guard("commands_limit_changed", || {
+                history_limit_changed(sender, Section::Commands);
             });
         }
 
@@ -1014,7 +1069,7 @@ fn setup_app() {
     let mtm = main_thread();
     let settings = settings::load();
     let mut store = Store::open();
-    store.trim_sections(settings.max_clips);
+    store.trim_sections(settings.history_limits());
     store.save();
     thumbnails::cleanup_legacy_cache();
     thumbnails::reset_previews();
@@ -1342,8 +1397,8 @@ fn poll_pasteboard() {
         for mut item in items {
             item.source_name = source_name.clone();
             item.source_bundle = source_bundle.clone();
-            let max = s.settings.max_clips;
-            if s.store.insert(item, max) {
+            let limits = s.settings.history_limits();
+            if s.store.insert_with_limits(item, limits) {
                 changed_history = true;
             }
         }
@@ -1401,7 +1456,7 @@ fn shell_history_files() -> Vec<ShellFile> {
 /// Read new commands on demand, when the Commands tab is opened or the user
 /// asks for a refresh. This is the only place that touches shell history.
 fn refresh_shell_history() {
-    let (dir, max) = with_state(|s| (s.store.dir().to_path_buf(), s.settings.max_clips));
+    let (dir, max) = with_state(|s| (s.store.dir().to_path_buf(), s.settings.max_commands));
     let cursor_path = dir.join("shell-history.json");
     let mut cursors = load_cursors(&cursor_path);
     let files = shell_history_files();
@@ -2820,12 +2875,14 @@ fn open_preferences() {
     with_state(|s| {
         if let Some(prefs) = &s.prefs {
             prefs
-                .max_field
-                .setStringValue(&NSString::from_str(&s.settings.max_clips.to_string()));
-            prefs.max_label.setStringValue(&NSString::from_str(&format!(
-                "Maximum: {} per section",
-                s.settings.max_clips
-            )));
+                .text_max_field
+                .setStringValue(&NSString::from_str(&s.settings.max_text.to_string()));
+            prefs
+                .images_max_field
+                .setStringValue(&NSString::from_str(&s.settings.max_images.to_string()));
+            prefs
+                .commands_max_field
+                .setStringValue(&NSString::from_str(&s.settings.max_commands.to_string()));
             prefs.record_box.setState(if s.settings.record {
                 NSControlStateValueOn
             } else {
@@ -2905,46 +2962,51 @@ fn reset_pinned_colors() {
     list.setNeedsDisplay(true);
 }
 
-fn max_clips_changed(sender: &NSTextField) {
+fn history_limit_value(raw: &str, fallback: usize) -> usize {
+    raw.trim()
+        .parse::<usize>()
+        .unwrap_or(fallback)
+        .clamp(1, MAX_LIMIT)
+}
+
+fn history_limit_changed(sender: &NSTextField, section: Section) {
     let mtm = main_thread();
-    let (old, clips, commands, confirm) = with_state(|s| {
-        let clips = s
+    let (old, count, confirm) = with_state(|s| {
+        let count = s
             .store
             .clips
             .iter()
-            .filter(|clip| clip.kind != ClipKind::Command)
+            .filter(|clip| match section {
+                Section::Text => !matches!(clip.kind, ClipKind::Command | ClipKind::Image),
+                Section::Images => clip.kind == ClipKind::Image,
+                Section::Commands => clip.kind == ClipKind::Command,
+            })
             .count();
-        let commands = s
-            .store
-            .clips
-            .iter()
-            .filter(|clip| clip.kind == ClipKind::Command)
-            .count();
-        (
-            s.settings.max_clips,
-            clips,
-            commands,
-            s.settings.confirm_delete,
-        )
+        let old = match section {
+            Section::Text => s.settings.max_text,
+            Section::Images => s.settings.max_images,
+            Section::Commands => s.settings.max_commands,
+        };
+        (old, count, s.settings.confirm_delete)
     });
 
-    let raw = sender.stringValue().to_string();
-    let new_limit = raw
-        .trim()
-        .parse::<usize>()
-        .unwrap_or(old)
-        .clamp(1, MAX_LIMIT);
+    let new_limit = history_limit_value(&sender.stringValue().to_string(), old);
     if new_limit == old {
         sender.setStringValue(&NSString::from_str(&old.to_string()));
         return;
     }
 
-    if (new_limit < clips || new_limit < commands) && confirm {
+    let (title, noun) = match section {
+        Section::Text => ("Reduce the text limit?", "text clippings"),
+        Section::Images => ("Reduce the image limit?", "images"),
+        Section::Commands => ("Reduce the command limit?", "commands"),
+    };
+    if new_limit < count && confirm {
         activate_app();
         let alert = NSAlert::new(mtm);
-        alert.setMessageText(&NSString::from_str("Reduce the history limit?"));
+        alert.setMessageText(&NSString::from_str(title));
         alert.setInformativeText(&NSString::from_str(&format!(
-            "You currently have {clips} clippings and {commands} commands stored. Reducing the limit to {new_limit} will permanently remove the oldest items from each section that exceeds it."
+            "You currently have {count} {noun} stored. Reducing the limit to {new_limit} will permanently remove the oldest unpinned items beyond it."
         )));
         alert.addButtonWithTitle(&NSString::from_str("Continue"));
         alert.addButtonWithTitle(&NSString::from_str("Cancel"));
@@ -2955,19 +3017,16 @@ fn max_clips_changed(sender: &NSTextField) {
     }
 
     with_state(|s| {
-        s.settings.max_clips = new_limit;
-        s.store.trim_sections(new_limit);
+        match section {
+            Section::Text => s.settings.max_text = new_limit,
+            Section::Images => s.settings.max_images = new_limit,
+            Section::Commands => s.settings.max_commands = new_limit,
+        }
+        s.store.trim_sections(s.settings.history_limits());
         s.store.save();
         settings::save(&s.settings);
     });
     sender.setStringValue(&NSString::from_str(&new_limit.to_string()));
-    with_state(|s| {
-        if let Some(prefs) = &s.prefs {
-            prefs.max_label.setStringValue(&NSString::from_str(&format!(
-                "Maximum: {new_limit} per section"
-            )));
-        }
-    });
     refresh_ui();
     prune_thumbnails();
 }
@@ -4380,6 +4439,15 @@ mod tests {
             "antirustpaste-app-test-{}-{name}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn history_limit_values_are_parsed_and_bounded() {
+        assert_eq!(history_limit_value("250", 200), 250);
+        assert_eq!(history_limit_value(" 250 ", 200), 250);
+        assert_eq!(history_limit_value("not a number", 200), 200);
+        assert_eq!(history_limit_value("0", 200), 1);
+        assert_eq!(history_limit_value("100000", 200), MAX_LIMIT);
     }
 
     #[test]

@@ -93,9 +93,10 @@ enable automatic pasting; copying clips never needs it.
 
 ### Preferences
 
-History limit, recording on/off, confirm-before-delete, optional automatic
-paste, start at login, the global shortcut, pinned-row colours, ignored apps,
-thumbnail cache cleanup, and the **History** tab.
+Independent text, image and command history limits, recording on/off,
+confirm-before-delete, optional automatic paste, start at login, the global
+shortcut, pinned-row colours, ignored apps, thumbnail cache cleanup, and the
+**History** tab.
 
 ### Updates
 
@@ -106,10 +107,10 @@ and restarts. Automatic checks run only in the packaged app.
 ### MCP control
 
 A bundled `antirustpaste-mcp` bridge exposes the running app to an MCP client
-over a private local socket. It can list, read, copy, pin and delete clippings,
-clear scopes, change settings, drive the popup and export images to PDF. It does
-not open a network port. See [MCP control](docs/mcp.md) for setup and the list
-of tools.
+over a private loopback HTTP endpoint. It can list, read, copy, pin and delete
+clippings, clear scopes, change settings, drive the popup and export images to
+PDF. It listens only on `127.0.0.1`, with an ephemeral port and a bearer token.
+See [MCP control](docs/mcp.md) for setup and the list of tools.
 
 ## Keyboard
 
@@ -150,8 +151,10 @@ History lives in plain files:
 - Preferences are stored in the `com.rustclip.app` user-defaults domain. Start
   at login writes `~/Library/LaunchAgents/com.rustclip.app.plist`.
 - Ignored apps are skipped for new captures; existing history is not purged.
-- MCP control is limited to the local user through a mode-`0600` Unix socket.
-  Anything that can read the history directory can already read the same data.
+- MCP control is limited to the local user: the app listens only on
+  `127.0.0.1`, uses an ephemeral port and requires a bearer token stored in a
+  mode-`0600` endpoint file. Anything that can read the history directory can
+  already read the same data.
 
 ## Build from source
 

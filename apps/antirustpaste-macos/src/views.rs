@@ -4,7 +4,7 @@
 use std::cell::{Cell, RefCell};
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{
     AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel,
 };
@@ -1812,8 +1812,9 @@ fn segment_symbol(name: &str, description: &str) -> Option<Retained<NSImage>> {
 
 pub(crate) struct PrefsParts {
     pub window: Retained<NSWindow>,
-    pub max_field: Retained<NSTextField>,
-    pub max_label: Retained<NSTextField>,
+    pub text_max_field: Retained<NSTextField>,
+    pub images_max_field: Retained<NSTextField>,
+    pub commands_max_field: Retained<NSTextField>,
     pub record_box: Retained<NSButton>,
     pub confirm_box: Retained<NSButton>,
     pub paste_box: Retained<NSButton>,
@@ -1860,6 +1861,31 @@ fn secondary_label(
     field
 }
 
+fn history_limit_field(
+    frame: NSRect,
+    action: Sel,
+    label: &str,
+    tooltip: &str,
+    target: &AnyObject,
+    delegate: &app::AppDelegate,
+    mtm: MainThreadMarker,
+) -> Retained<NSTextField> {
+    let field = NSTextField::new(mtm);
+    field.setFrame(frame);
+    field.setFont(Some(&NSFont::systemFontOfSize(13.0)));
+    field.setEditable(true);
+    field.setBezeled(true);
+    field.setDrawsBackground(true);
+    field.setToolTip(Some(&NSString::from_str(tooltip)));
+    field.setAccessibilityLabel(Some(&NSString::from_str(label)));
+    unsafe {
+        field.setTarget(Some(target));
+        field.setAction(Some(action));
+        field.setDelegate(Some(ProtocolObject::from_ref(delegate)));
+    }
+    field
+}
+
 pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelegate) -> PrefsParts {
     let target = as_any(delegate);
 
@@ -1903,35 +1929,56 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
         mtm,
     ));
 
-    let max_field = NSTextField::new(mtm);
-    max_field.setFrame(NSRect::new(
-        NSPoint::new(120.0, 332.0),
-        NSSize::new(64.0, 24.0),
-    ));
-    max_field.setFont(Some(&NSFont::systemFontOfSize(13.0)));
-    max_field.setEditable(true);
-    max_field.setBezeled(true);
-    max_field.setDrawsBackground(true);
-    unsafe {
-        max_field.setTarget(Some(target));
-        max_field.setAction(Some(sel!(maxClipsChanged:)));
-    }
-    general.addSubview(&max_field);
-
+    let text_max_field = history_limit_field(
+        NSRect::new(NSPoint::new(118.0, 332.0), NSSize::new(50.0, 24.0)),
+        sel!(textLimitChanged:),
+        "Text history limit",
+        "How many text clippings to keep. Includes rich text, HTML and file rows.",
+        target,
+        delegate,
+        mtm,
+    );
+    general.addSubview(&text_max_field);
     general.addSubview(&label(
-        "items",
-        NSRect::new(NSPoint::new(190.0, 336.0), NSSize::new(80.0, 20.0)),
+        "text",
+        NSRect::new(NSPoint::new(172.0, 336.0), NSSize::new(30.0, 20.0)),
         13.0,
         mtm,
     ));
 
-    let max_label = secondary_label(
-        "Maximum: 200 per section",
-        NSRect::new(NSPoint::new(270.0, 336.0), NSSize::new(190.0, 20.0)),
-        11.0,
+    let images_max_field = history_limit_field(
+        NSRect::new(NSPoint::new(208.0, 332.0), NSSize::new(50.0, 24.0)),
+        sel!(imagesLimitChanged:),
+        "Image history limit",
+        "How many images to keep.",
+        target,
+        delegate,
         mtm,
     );
-    general.addSubview(&max_label);
+    general.addSubview(&images_max_field);
+    general.addSubview(&label(
+        "images",
+        NSRect::new(NSPoint::new(262.0, 336.0), NSSize::new(42.0, 20.0)),
+        13.0,
+        mtm,
+    ));
+
+    let commands_max_field = history_limit_field(
+        NSRect::new(NSPoint::new(310.0, 332.0), NSSize::new(50.0, 24.0)),
+        sel!(commandsLimitChanged:),
+        "Command history limit",
+        "How many shell commands to keep. The bash default is 500.",
+        target,
+        delegate,
+        mtm,
+    );
+    general.addSubview(&commands_max_field);
+    general.addSubview(&label(
+        "commands",
+        NSRect::new(NSPoint::new(364.0, 336.0), NSSize::new(72.0, 20.0)),
+        13.0,
+        mtm,
+    ));
 
     let record_box = unsafe {
         NSButton::checkboxWithTitle_target_action(
@@ -2423,8 +2470,9 @@ pub(crate) fn build_preferences(mtm: MainThreadMarker, delegate: &app::AppDelega
 
     PrefsParts {
         window,
-        max_field,
-        max_label,
+        text_max_field,
+        images_max_field,
+        commands_max_field,
         record_box,
         confirm_box,
         paste_box,

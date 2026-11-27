@@ -1,6 +1,6 @@
 # Agent playbook
 
-> Last reviewed: 2026-11-26 · Version 0.4.0
+> Last reviewed: 2026-11-27 · Version 0.4.1
 
 Practical recipes for working on AntiRustPaste. Read [`../AGENTS.md`](../AGENTS.md)
 first; this file explains *how*, not what the rules are.
@@ -17,7 +17,7 @@ git status --short 2>/dev/null || echo "not a git repository"
 - This tree may have uncommitted work or no Git at all. Never delete a file you
   have not read.
 - Read `docs/architecture.md` and the module you are changing. For a UI change,
-  also read `docs/behavior.md` and `docs/testing.md`. For control-socket or MCP
+  also read `docs/behavior.md` and `docs/testing.md`. For control-endpoint or MCP
   changes, read `docs/mcp.md` and keep the tool schemas in sync.
 
 ## Safe run and stop
@@ -37,7 +37,7 @@ For a longer interactive run, start the process yourself and keep its PID:
 ```sh
 SCRATCH="$(mktemp -d)"
 ANTIRUSTPASTE_DATA_DIR="$SCRATCH/data" \
-ANTIRUSTPASTE_CONTROL_SOCKET="$SCRATCH/control.sock" \
+ANTIRUSTPASTE_CONTROL_FILE="$SCRATCH/control.json" \
 ANTIRUSTPASTE_DEFAULTS_SUITE="com.antirustpaste.agent.$$" \
 ANTIRUSTPASTE_LAUNCH_AGENT_DIR="$SCRATCH/LaunchAgents" \
 ANTIRUSTPASTE_THUMB_CACHE_DIR="$SCRATCH/thumbnails" \
@@ -223,7 +223,7 @@ An unknown or malformed stored value must fall back to the default, not panic.
 6. Add a unit test for a pure helper, a schema test, or both.
 7. Update [`mcp.md`](mcp.md), the tool list in `docs/testing.md` if covered, and
    `docs/behavior.md` when the user-visible contract changes.
-8. Verify with a scratch app and socket; never point a test MCP call at the real
+8. Verify with a scratch app and endpoint file; never point a test MCP call at the real
    history.
 
 ## Recipe: package and verify

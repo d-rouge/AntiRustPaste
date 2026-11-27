@@ -3,13 +3,20 @@
 use std::fs;
 use std::path::PathBuf;
 
-use antirustpaste_core::{IgnoredApp, Modifiers, Rgb, Settings};
+use antirustpaste_core::{
+    DEFAULT_COMMAND_LIMIT, DEFAULT_IMAGE_LIMIT, DEFAULT_TEXT_LIMIT, IgnoredApp, MAX_LIMIT,
+    Modifiers, Rgb, Settings,
+};
 use objc2::AnyThread;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2_foundation::{NSString, NSUserDefaults};
 
-const K_MAX: &str = "maxClips";
+const K_MAX_TEXT: &str = "maxTextClips";
+const K_MAX_IMAGES: &str = "maxImageClips";
+const K_MAX_COMMANDS: &str = "maxCommandClips";
+/// Earlier builds stored one shared limit for clippings and commands.
+const K_MAX_LEGACY: &str = "maxClips";
 const K_RECORD: &str = "recordClips";
 const K_CONFIRM: &str = "confirmDelete";
 const K_PASTE_AFTER_SELECT: &str = "pasteAfterSelect";
@@ -33,13 +40,22 @@ pub fn load() -> Settings {
     let defaults = defaults();
     let mut settings = Settings::default();
 
-    let max_key = NSString::from_str(K_MAX);
-    if defaults.objectForKey(&max_key).is_some() {
-        let value = defaults.integerForKey(&max_key);
-        if value > 0 {
-            settings.max_clips = (value as usize).min(antirustpaste_core::MAX_LIMIT);
-        }
-    }
+    let legacy_limit = legacy_limit(&defaults);
+    settings.max_text = limit_default(&defaults, K_MAX_TEXT)
+        .or(legacy_limit)
+        .unwrap_or(DEFAULT_TEXT_LIMIT);
+    settings.max_images = limit_default(&defaults, K_MAX_IMAGES)
+        .or(legacy_limit)
+        .unwrap_or(DEFAULT_IMAGE_LIMIT);
+    // The old shared `maxClips` covered clippings and commands. Commands now
+    // start at the shell-oriented default, but never below a value the user
+    // already chose, so a migration cannot silently delete command history.
+    settings.max_commands = match limit_default(&defaults, K_MAX_COMMANDS) {
+        Some(value) => value,
+        None => legacy_limit
+            .map(|value| value.max(DEFAULT_COMMAND_LIMIT))
+            .unwrap_or(DEFAULT_COMMAND_LIMIT),
+    };
 
     settings.record = bool_default(&defaults, K_RECORD, settings.record);
     settings.confirm_delete = bool_default(&defaults, K_CONFIRM, settings.confirm_delete);
@@ -79,7 +95,15 @@ pub fn load() -> Settings {
 
 pub fn save(settings: &Settings) {
     let defaults = defaults();
-    defaults.setInteger_forKey(settings.max_clips as isize, &NSString::from_str(K_MAX));
+    defaults.setInteger_forKey(settings.max_text as isize, &NSString::from_str(K_MAX_TEXT));
+    defaults.setInteger_forKey(
+        settings.max_images as isize,
+        &NSString::from_str(K_MAX_IMAGES),
+    );
+    defaults.setInteger_forKey(
+        settings.max_commands as isize,
+        &NSString::from_str(K_MAX_COMMANDS),
+    );
     defaults.setBool_forKey(settings.record, &NSString::from_str(K_RECORD));
     defaults.setBool_forKey(settings.confirm_delete, &NSString::from_str(K_CONFIRM));
     defaults.setBool_forKey(
@@ -154,6 +178,21 @@ fn defaults() -> Retained<NSUserDefaults> {
         }
     }
     NSUserDefaults::standardUserDefaults()
+}
+
+fn limit_default(defaults: &NSUserDefaults, key: &str) -> Option<usize> {
+    let key = NSString::from_str(key);
+    defaults.objectForKey(&key)?;
+    let value = defaults.integerForKey(&key);
+    if value > 0 {
+        Some((value as usize).min(MAX_LIMIT))
+    } else {
+        None
+    }
+}
+
+fn legacy_limit(defaults: &NSUserDefaults) -> Option<usize> {
+    limit_default(defaults, K_MAX_LEGACY)
 }
 
 fn bool_default(defaults: &NSUserDefaults, key: &str, fallback: bool) -> bool {

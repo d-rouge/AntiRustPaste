@@ -23,7 +23,7 @@ agent rules are in [`../AGENTS.md`](../AGENTS.md). Tool-specific entry points
 The user-facing overview, requirements and keyboard map live in
 [`../README.md`](../README.md).
 
-## Current status (0.4.0)
+## Current status (0.4.1)
 
 Structure: workspace with `apps/antirustpaste-macos`, `apps/antirustpaste-mcp`,
 `apps/antirustpaste-linux`, `crates/antirustpaste-control`,
@@ -38,10 +38,10 @@ clip kind, in-app text editing and Quick Look → TextEdit import, dedup, search
 keyboard navigation, ⌘1…⌘9 quick paste, paste, pinned clips, custom clip
 titles, row context menu, status menu, pause/resume recording, tab-scoped
 **Clear All** / **Clear Unpinned**, Preferences **History** tab with scoped
-deletes and disk usage, preferences, ignored apps, history limit, login item,
+deletes and disk usage, preferences, ignored apps, history limits, login item,
 global shortcut, launch/About release check with in-place update and restart. A
-bundled MCP bridge controls the running app through a private local socket; see
-[mcp.md](mcp.md).
+bundled MCP bridge controls the running app through a private loopback HTTP
+endpoint; see [mcp.md](mcp.md).
 
 Known gaps: no per-row accessibility elements in the hand-drawn list, no image
 grid, EXIF orientation is not applied, RTFD previews fall back to plain text and

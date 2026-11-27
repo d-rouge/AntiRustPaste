@@ -1,6 +1,6 @@
 # Architecture
 
-> Last reviewed: 2026-11-26 · Version 0.4.0
+> Last reviewed: 2026-11-27 · Version 0.4.1
 
 AntiRustPaste is a single-process macOS accessory app. AppKit runs the main loop and
 a repeating `NSTimer` polls the pasteboard. There is no webview, database engine
@@ -23,8 +23,8 @@ The repository is a Cargo workspace:
 - `apps/antirustpaste-mcp` — the MCP stdio bridge for the macOS shell;
 - `apps/antirustpaste-linux` — a GTK4/X11 shell that builds on Linux but was not
   exercised on the macOS host used for this documentation;
-- `crates/antirustpaste-control` — the local JSON control protocol, socket path
-  and client shared by the app and the MCP bridge;
+- `crates/antirustpaste-control` — the local HTTP control protocol, endpoint
+  discovery and client shared by the app and the MCP bridge;
 - `crates/antirustpaste-core` — platform-neutral model, storage, settings, filtering
   and thumbnail worker;
 - `crates/antirustpaste-imaging` — a pure-Rust, `#![forbid(unsafe_code)]` codec with
@@ -47,11 +47,11 @@ never depends on a shell. See [platforms.md](platforms.md).
 | `apps/antirustpaste-macos/src/hotkey.rs` | Carbon `RegisterEventHotKey` wrapper and shortcut formatting |
 | `apps/antirustpaste-macos/src/settings.rs` | `NSUserDefaults` keys, modifier migration, LaunchAgent management |
 | `apps/antirustpaste-macos/src/thumbnails.rs` | Boot-cleared cache path, private directory policy, `NSImage` loading |
-| `apps/antirustpaste-macos/src/app/control.rs` | Non-blocking private Unix socket, request dispatch and MCP actions on the main thread |
+| `apps/antirustpaste-macos/src/app/control.rs` | Non-blocking loopback HTTP endpoint, request dispatch and MCP actions on the main thread |
 | `apps/antirustpaste-linux/src/` | GTK4/X11 shell: tray, popup, clipboard, X11 hot key/paste, XDG settings; no MCP bridge |
 | `apps/antirustpaste-macos/src/update.rs` | Release JSON/version/checksum parsing, bundle detection and the detached install script (no AppKit) |
-| `apps/antirustpaste-mcp/src/main.rs` | MCP stdio server, tool schemas and forwarding to the control socket |
-| `crates/antirustpaste-control/src/lib.rs` | JSON-line request/response types, socket path, client and base64 helper |
+| `apps/antirustpaste-mcp/src/main.rs` | MCP stdio server, tool schemas and forwarding to the control endpoint |
+| `crates/antirustpaste-control/src/lib.rs` | HTTP request/response types, endpoint discovery, client and base64 helper |
 | `crates/antirustpaste-core/src/store.rs` | `Clip`/`Captured`, JSON index, blob files, dedup, trim, command upsert, clear scopes, storage usage, previews, titles, text edits, relative time |
 | `crates/antirustpaste-core/src/settings.rs` | Platform-neutral `Settings`, `IgnoredApp`, `Modifiers` bits |
 | `crates/antirustpaste-core/src/filter.rs` | `Section` (Text/Images/Commands) and search filtering |
@@ -84,7 +84,7 @@ main
                 ├── record the initial pasteboard changeCount
                 ├── NSStatusItem + status menu
                 ├── build popup panel, search field, list, footer, panel delegate
-                ├── bind the private MCP control socket (failure only disables MCP)
+                ├── bind the private MCP loopback HTTP endpoint (failure only disables MCP)
                 ├── install AppState in the thread-local (starts the thumbnail worker)
                 ├── install key monitor, 1 s pasteboard poll and 0.1 s thumbnail/control timer
                 ├── register the Carbon hot key
@@ -199,8 +199,8 @@ Commands tab / Refresh button / ⌘R
   already stored are only moved when the file carries a newer timestamp, so a
   bulk re-read does not reorder the list.
 - Commands are `ClipKind::Command` records with no blob and the shell name in
-  `source_name`. `Store::trim_sections` and the insert path keep a separate
-  budget for `command` and non-`command` records.
+  `source_name`. `Store::trim_sections` and the insert path keep independent
+  budgets for `command`, `image` and the remaining text-like records.
 - Nothing runs on a timer. Shell history is read only when the tab is selected,
   the Refresh button is pressed or `⌘R` is used; the files are never watched.
 - Bounds: 1 MiB tail, 256 KiB delta, 16 KiB per command, 64 KiB cursor file.
@@ -283,8 +283,8 @@ inside the mouse event lets the status bar take key back and immediately fires
 
 Preferences are a regular `NSWindow` with an `NSTabView`:
 
-- **General** — max items per section, record toggle, confirm-before-delete,
-  start at login, shortcut recorder.
+- **General** — separate text, image and command limits, record toggle,
+  confirm-before-delete, start at login, shortcut recorder.
 - **Appearance** — pinned-row background and marker colour wells.
 - **Exceptions** — ignored apps in an `NSScrollView` with a custom list view and
   Add/Remove buttons.
@@ -309,32 +309,42 @@ delegates are not retained.
 ```
 MCP client
  └── antirustpaste-mcp (stdio, JSON-RPC)
-      └── control::call -> <data>/control.sock (0600)
-           └── app/control.rs poll on the 0.1 s timer
-                ├── read one JSON line per request
-                ├── dispatch on the main thread with with_state
-                ├── reuse the same actions as menus and keyboard
-                └── queue a JSON line response
+      └── control::call -> <data>/control.json (0600) -> POST /control
+           └── 127.0.0.1:<ephemeral port>, Bearer token
+                └── app/control.rs poll on the 0.1 s timer
+                     ├── parse one bounded HTTP request
+                     ├── check Host, bearer token and POST /control
+                     ├── dispatch on the main thread with with_state
+                     ├── reuse the same actions as menus and keyboard
+                     └── queue an HTTP response with Content-Length
 ```
 
-The app binds a non-blocking `UnixListener` in its data directory. The path can
-be moved with `ANTIRUSTPASTE_CONTROL_SOCKET`, but only an absolute path is
-accepted. A stale socket is removed only when the existing file is a Unix
-socket; any other file disables control instead of being replaced. The socket is
-mode `0600` and there is no TCP listener.
+The app binds a non-blocking `TcpListener` to `127.0.0.1:0` and publishes an
+endpoint file next to the history. The file contains the port, a random bearer
+token and the app pid, is mode `0600`, and is written atomically. The path can be
+moved with `ANTIRUSTPASTE_CONTROL_FILE`, but only an absolute path is accepted.
+A stale regular file is replaced at the next start; any other file disables
+control instead of being replaced. The listener never binds a LAN interface.
 
-`crates/antirustpaste-control` owns the request/response types, socket discovery
-and the client used by `apps/antirustpaste-mcp`. The MCP bridge owns only the MCP
-tool schemas and JSON-RPC envelope; it never opens history files. The app's
-`app/control.rs` owns the actions and reuses `Store`, settings, pasteboard,
-Quick Look, PDF and UI helpers, so MCP and the UI share one state.
+`crates/antirustpaste-control` owns the request/response types, endpoint
+discovery, HTTP framing and the client used by `apps/antirustpaste-mcp`. The
+bridge owns only the MCP tool schemas and JSON-RPC envelope; it never opens
+history files. The app's `app/control.rs` owns the actions and reuses `Store`,
+settings, pasteboard, Quick Look, PDF and UI helpers, so MCP and the UI share one
+state.
+
+The HTTP surface is deliberately minimal: one `POST /control`, an exact `Host`
+check, `Authorization: Bearer`, no CORS headers and `Connection: close`. Header
+and body sizes are bounded, the token is stored only in the private endpoint
+file, and responses are capped at 16 MiB. A request body is the JSON control
+request; a response body is the JSON control response.
 
 `ControlServer::poll` collects requests first, then each request is dispatched
 after the `with_state` borrow is dropped, and responses are queued afterwards.
 This is the same re-entrancy rule as AppKit callbacks and menu tracking. The
 listener and connections are non-blocking; output is buffered per connection and
-flushed on later timer ticks. Requests are capped at 1 MiB and responses at
-16 MiB. No new thread, dispatch queue or blocking sleep is introduced.
+flushed on later timer ticks. No new thread, dispatch queue or blocking sleep is
+introduced.
 
 ## Images and thumbnails
 
@@ -543,9 +553,12 @@ version field; adding one is the first step before any breaking change.
 The **model** lives in `antirustpaste-core::Settings` and uses platform-neutral
 `Modifiers` bits. The **macOS persistence** in
 `apps/antirustpaste-macos/src/settings.rs` stores keys in `NSUserDefaults`
-(`maxClips`, `recordClips`, `confirmDelete`, `startAtLogin`, `ignoredApps`,
-`hotkeyKeyCode`, `hotkeyModifiers`, `hotkeyDisplay`, `hotkeyEnabled`), migrates
-old NSEvent modifier values and redirects to `ANTIRUSTPASTE_DEFAULTS_SUITE` in tests.
+(`maxTextClips`, `maxImageClips`, `maxCommandClips`, `recordClips`,
+`confirmDelete`, `startAtLogin`, `ignoredApps`, `hotkeyKeyCode`,
+`hotkeyModifiers`, `hotkeyDisplay`, `hotkeyEnabled`), migrates the old shared
+`maxClips` value to the text and image groups, starts commands at 500 unless the
+old limit was higher, migrates old NSEvent modifier values and redirects to
+`ANTIRUSTPASTE_DEFAULTS_SUITE` in tests.
 Future shells implement their own persistence for the same core model.
 
 Start at login writes `~/Library/LaunchAgents/com.rustclip.app.plist` with the

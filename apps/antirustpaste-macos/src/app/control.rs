@@ -1,102 +1,125 @@
-//! Private local control socket for the MCP bridge.
+//! Private loopback HTTP control server for the MCP bridge.
 //!
 //! The listener is non-blocking and is serviced by the existing 0.1 s timer on
-//! the main thread. No new thread, queue or blocking wait is introduced.
+//! the main thread. It binds only to `127.0.0.1`, publishes an ephemeral port
+//! and bearer token in a mode-`0600` endpoint file, and closes each connection
+//! after one request.
 
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use antirustpaste_control::{
-    ControlError, ControlRequest, ControlResponse, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
-    base64_encode, socket_path,
+    ControlEndpoint, ControlError, ControlRequest, ControlResponse, HttpRequestView,
+    MAX_HEADER_BYTES, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, base64_encode, encode_http_response,
+    endpoint_path, new_token, parse_http_request, read_endpoint, write_endpoint,
 };
 use serde_json::{Value, json};
 
 use super::*;
 
 const MAX_CONNECTIONS: usize = 8;
-const MAX_REQUESTS_PER_TICK: usize = 16;
 const CONNECTION_IDLE: Duration = Duration::from_secs(300);
 
 pub(crate) struct ControlServer {
-    listener: UnixListener,
-    path: PathBuf,
+    listener: TcpListener,
+    endpoint_file: PathBuf,
+    port: u16,
+    token: String,
     next_id: u64,
     connections: Vec<ControlConnection>,
 }
 
 struct ControlConnection {
     id: u64,
-    stream: UnixStream,
+    stream: TcpStream,
     input: Vec<u8>,
     output: Vec<u8>,
     output_offset: usize,
     last_active: Instant,
     dead: bool,
+    request_received: bool,
+    close_after_flush: bool,
 }
 
 impl ControlServer {
-    /// Bind the per-user control socket. Failure only disables the MCP bridge;
-    /// the menu-bar app keeps working.
+    /// Bind the loopback control endpoint. Failure only disables the MCP
+    /// bridge; the menu-bar app keeps working.
     pub(crate) fn start() -> Option<Self> {
-        let path = socket_path()?;
-        if let Some(parent) = path.parent()
+        let endpoint_file = endpoint_path()?;
+        if let Some(parent) = endpoint_file.parent()
             && let Err(error) = fs::create_dir_all(parent)
         {
             eprintln!("antirustpaste: could not create the control directory: {error}");
             return None;
         }
+        remove_legacy_socket(&endpoint_file);
 
-        match fs::symlink_metadata(&path) {
-            Ok(meta) if meta.file_type().is_socket() => {
-                if let Err(error) = fs::remove_file(&path) {
-                    eprintln!("antirustpaste: could not remove the stale control socket: {error}");
+        match fs::symlink_metadata(&endpoint_file) {
+            Ok(meta) if meta.file_type().is_file() => {
+                if let Err(error) = fs::remove_file(&endpoint_file) {
+                    eprintln!(
+                        "antirustpaste: could not remove the stale control endpoint: {error}"
+                    );
                     return None;
                 }
             }
             Ok(_) => {
-                eprintln!("antirustpaste: refusing to replace a non-socket control path");
+                eprintln!("antirustpaste: refusing to replace a non-file control endpoint");
                 return None;
             }
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => {
-                eprintln!("antirustpaste: could not inspect the control socket: {error}");
+                eprintln!("antirustpaste: could not inspect the control endpoint: {error}");
                 return None;
             }
         }
 
-        let listener = match UnixListener::bind(&path) {
+        let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, 0)) {
             Ok(listener) => listener,
             Err(error) => {
-                eprintln!("antirustpaste: could not bind the control socket: {error}");
+                eprintln!("antirustpaste: could not bind the control endpoint: {error}");
                 return None;
             }
         };
-        if let Err(error) = fs::set_permissions(&path, fs::Permissions::from_mode(0o600)) {
-            eprintln!("antirustpaste: could not protect the control socket: {error}");
-            let _ = fs::remove_file(&path);
+        let port = match listener.local_addr() {
+            Ok(address) => address.port(),
+            Err(error) => {
+                eprintln!("antirustpaste: could not read the control endpoint port: {error}");
+                return None;
+            }
+        };
+        let token = new_token();
+        if let Err(error) =
+            write_endpoint(&endpoint_file, &ControlEndpoint::new(port, token.clone()))
+        {
+            eprintln!("antirustpaste: could not publish the control endpoint: {error}");
             return None;
         }
         if let Err(error) = listener.set_nonblocking(true) {
-            eprintln!("antirustpaste: could not make the control socket non-blocking: {error}");
-            let _ = fs::remove_file(&path);
+            eprintln!("antirustpaste: could not make the control endpoint non-blocking: {error}");
+            let _ = fs::remove_file(&endpoint_file);
             return None;
         }
 
         Some(Self {
             listener,
-            path,
+            endpoint_file,
+            port,
+            token,
             next_id: 1,
             connections: Vec::new(),
         })
     }
 
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
+    pub(crate) fn endpoint_file(&self) -> &Path {
+        &self.endpoint_file
+    }
+
+    pub(crate) fn port(&self) -> u16 {
+        self.port
     }
 
     fn poll(&mut self) -> Vec<(u64, ControlRequest)> {
@@ -123,6 +146,8 @@ impl ControlServer {
                         output_offset: 0,
                         last_active: now,
                         dead: false,
+                        request_received: false,
+                        close_after_flush: false,
                     });
                 }
                 Err(error) if error.kind() == ErrorKind::WouldBlock => break,
@@ -131,11 +156,13 @@ impl ControlServer {
         }
 
         let mut requests = Vec::new();
+        let token = self.token.clone();
+        let port = self.port;
         for connection in &mut self.connections {
-            if connection.dead || !connection.output.is_empty() {
+            if connection.dead || !connection.output.is_empty() || connection.request_received {
                 continue;
             }
-            read_connection(connection, &mut requests);
+            read_connection(connection, &mut requests, port, &token);
         }
         self.connections.retain(|connection| !connection.dead);
         requests
@@ -147,18 +174,35 @@ impl ControlServer {
             .iter_mut()
             .find(|connection| connection.id == connection_id)
         {
-            enqueue_response(connection, response);
+            enqueue_control_response(connection, response);
         }
     }
 }
 
 impl Drop for ControlServer {
     fn drop(&mut self) {
-        if fs::symlink_metadata(&self.path).is_ok_and(|meta| meta.file_type().is_socket()) {
-            let _ = fs::remove_file(&self.path);
+        if let Ok(endpoint) = read_endpoint(&self.endpoint_file)
+            && constant_time_eq(endpoint.token.as_bytes(), self.token.as_bytes())
+        {
+            let _ = fs::remove_file(&self.endpoint_file);
         }
     }
 }
+
+#[cfg(unix)]
+fn remove_legacy_socket(endpoint_file: &Path) {
+    use std::os::unix::fs::FileTypeExt;
+    let Some(parent) = endpoint_file.parent() else {
+        return;
+    };
+    let legacy = parent.join("control.sock");
+    if fs::symlink_metadata(&legacy).is_ok_and(|meta| meta.file_type().is_socket()) {
+        let _ = fs::remove_file(legacy);
+    }
+}
+
+#[cfg(not(unix))]
+fn remove_legacy_socket(_endpoint_file: &Path) {}
 
 fn flush_connection(connection: &mut ControlConnection) {
     while connection.output_offset < connection.output.len() {
@@ -183,10 +227,18 @@ fn flush_connection(connection: &mut ControlConnection) {
     if connection.output_offset >= connection.output.len() {
         connection.output.clear();
         connection.output_offset = 0;
+        if connection.close_after_flush {
+            connection.dead = true;
+        }
     }
 }
 
-fn read_connection(connection: &mut ControlConnection, requests: &mut Vec<(u64, ControlRequest)>) {
+fn read_connection(
+    connection: &mut ControlConnection,
+    requests: &mut Vec<(u64, ControlRequest)>,
+    port: u16,
+    token: &str,
+) {
     let mut buffer = [0u8; 4096];
     loop {
         match connection.stream.read(&mut buffer) {
@@ -197,13 +249,15 @@ fn read_connection(connection: &mut ControlConnection, requests: &mut Vec<(u64, 
             Ok(read) => {
                 connection.last_active = Instant::now();
                 connection.input.extend_from_slice(&buffer[..read]);
-                if connection.input.len() > MAX_REQUEST_BYTES {
-                    enqueue_response(
+                let limit = MAX_HEADER_BYTES
+                    .saturating_add(MAX_REQUEST_BYTES)
+                    .saturating_add(4);
+                if connection.input.len() > limit {
+                    enqueue_http_error(
                         connection,
-                        ControlResponse::error(ControlError::new(
-                            "request_too_large",
-                            "The control request is too large.",
-                        )),
+                        413,
+                        "Payload Too Large",
+                        "The control request is too large.",
                     );
                     connection.input.clear();
                     break;
@@ -218,62 +272,143 @@ fn read_connection(connection: &mut ControlConnection, requests: &mut Vec<(u64, 
         }
     }
 
-    while connection.output.is_empty() && requests.len() < MAX_REQUESTS_PER_TICK {
-        let Some(end) = connection.input.iter().position(|byte| *byte == b'\n') else {
-            break;
-        };
-        let line: Vec<u8> = connection.input.drain(..=end).collect();
-        let Some(line) = line.get(..line.len().saturating_sub(1)) else {
-            continue;
-        };
-        let line = line.strip_suffix(b"\r").unwrap_or(line);
-        if line.is_empty() {
-            continue;
-        }
-        match serde_json::from_slice::<ControlRequest>(line) {
-            Ok(request) => requests.push((connection.id, request)),
-            Err(_) => {
-                enqueue_response(
-                    connection,
-                    ControlResponse::error(ControlError::new(
-                        "bad_request",
-                        "The control request is not valid JSON.",
-                    )),
-                );
-                break;
+    if connection.dead || connection.request_received || !connection.output.is_empty() {
+        return;
+    }
+    match parse_http_request(&connection.input, MAX_REQUEST_BYTES) {
+        Ok(request) => {
+            connection.request_received = true;
+            match authorize_and_decode(&request, port, token) {
+                Ok(control) => requests.push((connection.id, control)),
+                Err((status, reason, message)) => {
+                    enqueue_http_error(connection, status, reason, message);
+                }
             }
+        }
+        Err(error) if error.kind() == ErrorKind::UnexpectedEof => {}
+        Err(error) => {
+            connection.request_received = true;
+            let (status, reason) = if error.kind() == ErrorKind::InvalidInput {
+                (413, "Payload Too Large")
+            } else {
+                (400, "Bad Request")
+            };
+            enqueue_http_error(
+                connection,
+                status,
+                reason,
+                "The HTTP control request is not valid.",
+            );
+            connection.input.clear();
         }
     }
 }
 
-fn enqueue_response(connection: &mut ControlConnection, response: ControlResponse) {
+fn authorize_and_decode(
+    request: &HttpRequestView<'_>,
+    port: u16,
+    token: &str,
+) -> Result<ControlRequest, (u16, &'static str, &'static str)> {
+    if request.method != "POST" {
+        return Err((
+            405,
+            "Method Not Allowed",
+            "Only POST /control is supported.",
+        ));
+    }
+    if request.path != "/control" {
+        return Err((404, "Not Found", "Unknown control endpoint."));
+    }
+    let expected_host = format!("127.0.0.1:{port}");
+    if request.host != Some(expected_host.as_str()) {
+        return Err((403, "Forbidden", "Invalid Host header."));
+    }
+    let Some(authorization) = request.authorization else {
+        return Err((401, "Unauthorized", "Missing bearer token."));
+    };
+    let Some(presented) = authorization.strip_prefix("Bearer ") else {
+        return Err((401, "Unauthorized", "Invalid bearer token."));
+    };
+    if !constant_time_eq(presented.as_bytes(), token.as_bytes()) {
+        return Err((401, "Unauthorized", "Invalid bearer token."));
+    }
+    serde_json::from_slice(request.body)
+        .map_err(|_| (400, "Bad Request", "The control request is not valid JSON."))
+}
+
+fn constant_time_eq(first: &[u8], second: &[u8]) -> bool {
+    if first.len() != second.len() {
+        return false;
+    }
+    let mut difference = 0u8;
+    for (left, right) in first.iter().zip(second) {
+        difference |= left ^ right;
+    }
+    difference == 0
+}
+
+fn enqueue_http_error(
+    connection: &mut ControlConnection,
+    status: u16,
+    reason: &str,
+    message: &str,
+) {
+    let body = json!({ "error": message }).to_string();
+    enqueue_wire(
+        connection,
+        &encode_http_response(status, reason, body.as_bytes()),
+    );
+}
+
+fn enqueue_control_response(connection: &mut ControlConnection, response: ControlResponse) {
     if connection.dead {
         return;
     }
-    let mut bytes = match serde_json::to_vec(&response) {
-        Ok(bytes) => bytes,
+    let body = match serde_json::to_vec(&response) {
+        Ok(body) => body,
         Err(_) => {
-            connection.dead = true;
+            enqueue_http_error(
+                connection,
+                500,
+                "Internal Server Error",
+                "The app could not encode the response.",
+            );
             return;
         }
     };
-    bytes.push(b'\n');
-    if connection.output.len().saturating_add(bytes.len()) > MAX_RESPONSE_BYTES {
-        let fallback = ControlResponse::error(ControlError::new(
-            "response_too_large",
-            "The response is too large for the control socket.",
-        ));
-        if let Ok(mut fallback_bytes) = serde_json::to_vec(&fallback) {
-            fallback_bytes.push(b'\n');
-            if connection.output.len().saturating_add(fallback_bytes.len()) <= MAX_RESPONSE_BYTES {
-                connection.output.extend_from_slice(&fallback_bytes);
-                return;
-            }
-        }
-        connection.dead = true;
+    if body.len() > MAX_RESPONSE_BYTES {
+        enqueue_http_error(
+            connection,
+            500,
+            "Internal Server Error",
+            "The response is too large.",
+        );
         return;
     }
-    connection.output.extend_from_slice(&bytes);
+    enqueue_wire(connection, &encode_http_response(200, "OK", &body));
+}
+
+fn enqueue_wire(connection: &mut ControlConnection, wire: &[u8]) {
+    if connection.dead {
+        return;
+    }
+    let limit = MAX_RESPONSE_BYTES.saturating_add(MAX_HEADER_BYTES);
+    if connection.output.len().saturating_add(wire.len()) > limit {
+        let fallback = encode_http_response(
+            500,
+            "Internal Server Error",
+            br#"{"error":"The response is too large."}"#,
+        );
+        if connection.output.len().saturating_add(fallback.len()) <= limit {
+            connection.output.extend_from_slice(&fallback);
+            connection.close_after_flush = true;
+        } else {
+            connection.dead = true;
+        }
+        return;
+    }
+    connection.output.extend_from_slice(wire);
+    connection.close_after_flush = true;
 }
 
 /// Called from the existing 0.1 s timer. Requests are collected first so no
@@ -444,7 +579,9 @@ fn storage_json() -> Value {
 fn settings_snapshot() -> Value {
     let settings = with_state(|s| s.settings.clone());
     json!({
-        "max_clips": settings.max_clips,
+        "max_text": settings.max_text,
+        "max_images": settings.max_images,
+        "max_commands": settings.max_commands,
         "record": settings.record,
         "confirm_delete": settings.confirm_delete,
         "paste_after_select": settings.paste_after_select,
@@ -516,14 +653,15 @@ fn dispatch(method: &str, params: &Value) -> Result<Value, ControlError> {
 
 fn status() -> Result<Value, ControlError> {
     let (version, pid) = (env!("CARGO_PKG_VERSION"), std::process::id());
-    let (recording, section, history_dir, socket) = with_state(|s| {
+    let (recording, section, history_dir, endpoint_file, endpoint_port) = with_state(|s| {
         (
             s.settings.record,
             s.section,
             s.store.dir().display().to_string(),
             s.control
                 .as_ref()
-                .map(|control| control.path().display().to_string()),
+                .map(|control| control.endpoint_file().display().to_string()),
+            s.control.as_ref().map(ControlServer::port),
         )
     });
     Ok(json!({
@@ -535,7 +673,10 @@ fn status() -> Result<Value, ControlError> {
         "counts": counts_json(),
         "storage": storage_json(),
         "history_dir": history_dir,
-        "control_socket": socket
+        "control_endpoint": {
+            "file": endpoint_file,
+            "port": endpoint_port
+        }
     }))
 }
 
@@ -786,30 +927,51 @@ fn update_settings(params: &Value) -> Result<Value, ControlError> {
             settings::save(&s.settings);
         });
     }
-    if let Some(max_clips) = optional_usize(params, "max_clips") {
-        let new_limit = max_clips.clamp(1, MAX_LIMIT);
-        let old_limit = with_state(|s| s.settings.max_clips);
-        if new_limit != old_limit {
-            with_state(|s| {
-                s.settings.max_clips = new_limit;
-                s.store.trim_sections(new_limit);
-                s.store.save();
-                settings::save(&s.settings);
-            });
-            let prefs = with_state(|s| {
-                s.prefs
-                    .as_ref()
-                    .map(|prefs| (prefs.max_field.clone(), prefs.max_label.clone()))
-            });
-            if let Some((field, label)) = prefs {
-                field.setStringValue(&NSString::from_str(&new_limit.to_string()));
-                label.setStringValue(&NSString::from_str(&format!(
-                    "Maximum: {new_limit} per section"
-                )));
-            }
-            refresh_ui();
-            prune_thumbnails();
+    let mut limits = with_state(|s| s.settings.history_limits());
+    let mut limits_changed = false;
+    if let Some(value) = optional_usize(params, "max_text") {
+        limits.text = value.clamp(1, MAX_LIMIT);
+        limits_changed = true;
+    }
+    if let Some(value) = optional_usize(params, "max_images") {
+        limits.images = value.clamp(1, MAX_LIMIT);
+        limits_changed = true;
+    }
+    if let Some(value) = optional_usize(params, "max_commands") {
+        limits.commands = value.clamp(1, MAX_LIMIT);
+        limits_changed = true;
+    }
+    // Earlier MCP clients sent one shared `max_clips`. Keep accepting it and
+    // apply it to all three groups, matching the old per-section behaviour.
+    if let Some(value) = optional_usize(params, "max_clips") {
+        limits = antirustpaste_core::HistoryLimits::uniform(value.clamp(1, MAX_LIMIT));
+        limits_changed = true;
+    }
+    if limits_changed {
+        with_state(|s| {
+            s.settings.max_text = limits.text;
+            s.settings.max_images = limits.images;
+            s.settings.max_commands = limits.commands;
+            s.store.trim_sections(limits);
+            s.store.save();
+            settings::save(&s.settings);
+        });
+        let prefs = with_state(|s| {
+            s.prefs.as_ref().map(|prefs| {
+                (
+                    prefs.text_max_field.clone(),
+                    prefs.images_max_field.clone(),
+                    prefs.commands_max_field.clone(),
+                )
+            })
+        });
+        if let Some((text, images, commands)) = prefs {
+            text.setStringValue(&NSString::from_str(&limits.text.to_string()));
+            images.setStringValue(&NSString::from_str(&limits.images.to_string()));
+            commands.setStringValue(&NSString::from_str(&limits.commands.to_string()));
         }
+        refresh_ui();
+        prune_thumbnails();
     }
     Ok(settings_snapshot())
 }

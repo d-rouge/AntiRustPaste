@@ -12,8 +12,9 @@ pub mod thumbnails;
 
 pub use filter::{Section, filter_indices};
 pub use settings::{
-    DEFAULT_LIMIT, DEFAULT_PINNED_BACKGROUND, DEFAULT_PINNED_INDICATOR, IgnoredApp, MAX_LIMIT,
-    Modifiers, Rgb, Settings,
+    DEFAULT_COMMAND_LIMIT, DEFAULT_IMAGE_LIMIT, DEFAULT_PINNED_BACKGROUND,
+    DEFAULT_PINNED_INDICATOR, DEFAULT_TEXT_LIMIT, HistoryLimits, IgnoredApp, MAX_LIMIT, Modifiers,
+    Rgb, Settings,
 };
 pub use shell_history::{
     Shell, ShellCommand, ShellCursors, ShellFile, ShellRead, load_cursors, now_ms, read_new,

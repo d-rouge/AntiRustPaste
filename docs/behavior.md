@@ -1,6 +1,6 @@
 # Behaviour specification
 
-> Last reviewed: 2026-11-26 · Version 0.4.0
+> Last reviewed: 2026-11-27 · Version 0.4.1
 
 This is the contract the app implements and the specification agents may use.
 Code, labels and assets are AntiRustPaste's own.
@@ -47,9 +47,10 @@ Rules:
   last frontmost application that was not AntiRustPaste at poll time.
 - Duplicate content (same kind, text, data type and bytes) is not appended.
   The existing entry moves to the top.
-- The history is trimmed to the configured maximum (default 200, range 1–9999).
-  Clipboard items and shell commands have independent budgets: up to the limit
-  of each is kept, so a busy shell cannot evict clippings and vice versa.
+- The history is trimmed to the configured maximum per group: 200 text
+  clippings and 200 images by default, and 500 commands. The three budgets are
+  independent, so a run of screenshots cannot evict text and a busy shell cannot
+  evict either. Each limit can be changed from 1 to 9999.
 
 ### Shell commands
 
@@ -67,8 +68,8 @@ the home directory for tests.
 Rules:
 
 - The first read keeps the most recent commands that fit both the configured
-  limit and a bounded tail (1 MiB) of each file. Later reads resume from a saved
-  byte offset, so only appended commands are read.
+  command limit (default 500) and a bounded tail (1 MiB) of each file. Later
+  reads resume from a saved byte offset, so only appended commands are read.
 - A saved offset is validated with a short fingerprint. If the file was
   truncated, rotated or rewritten, it is re-read as a tail. Existing commands
   are not reordered by that bulk read unless the file carries a timestamp that
@@ -365,10 +366,16 @@ written.
 
 ### General
 
-- **Remember last N items** — integer 1–9999, applied independently to
-  clippings and to commands. Reducing the limit below either section's current
-  count asks for confirmation when confirmations are on, then trims the oldest
-  items in that section. Invalid input reverts to the previous value.
+- **Remember last** — three independent integer fields, each 1–9999: **text**
+  clippings (plain, rich, HTML and file rows), **images**, and **commands**. The
+  defaults are 200, 200 and 500; 500 is the bash default `HISTSIZE`, and zsh
+  users who keep 1000 can raise the command limit. A typed value is committed on
+  Return **or** when the field loses focus, so clicking another control does not
+  discard it. Invalid input reverts to the previous value. Reducing one limit
+  below that group's current count asks for confirmation when confirmations are
+  on, then trims the oldest unpinned items in that group only. An older build's
+  single shared limit becomes the text and image limit; commands keep the larger
+  of that value and 500, so upgrading never deletes command history.
 - **Record clipboard history** — when off, no new clips are stored.
 - **Confirm before deleting** — gates row deletion, every clear action and limit
   reduction.
@@ -512,17 +519,18 @@ an empty new history rather than deleting anything.
 
 ## 12. MCP control
 
-A bundled MCP bridge can control the running app over a private Unix socket in
-the history directory. The socket is mode `0600`, accepts only local
-connections, and is served by the existing main-thread timer; there is no TCP
-port and no new worker thread. The bridge exposes history reads, copy/pin/delete
-and scoped clears, title and text edits, settings, ignored apps, popup and Quick
-Look control, PDF export and quit. MCP calls are explicit, so they do not show
-the confirmation alerts used by the UI; they still follow the same storage,
-pruning and command-protection rules.
+A bundled MCP bridge can control the running app over a private loopback HTTP
+endpoint. The app binds only `127.0.0.1` on an ephemeral port, publishes the port
+and a random bearer token in a mode-`0600` file next to the history, and is
+served by the existing main-thread timer; there is no LAN listener and no new
+worker thread. The bridge exposes history reads, copy/pin/delete and scoped
+clears, title and text edits, settings, ignored apps, popup and Quick Look
+control, PDF export and quit. MCP calls are explicit, so they do not show the
+confirmation alerts used by the UI; they still follow the same storage, pruning
+and command-protection rules.
 
 The global shortcut and the update check are not exposed as MCP tools. Clipboard
-history is private: any MCP client connected to the socket is trusted with the
+history is private: any MCP client connected to the endpoint is trusted with the
 same data as a local process reading the history directory. See
 [mcp.md](mcp.md) for the tool list and configuration.
 

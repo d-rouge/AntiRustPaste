@@ -106,11 +106,11 @@ the global menu bar.
 
 ## ADR-007: Test isolation through environment variables
 
-**Decision.** `ANTIRUSTPASTE_DATA_DIR`, `ANTIRUSTPASTE_CONTROL_SOCKET`,
+**Decision.** `ANTIRUSTPASTE_DATA_DIR`, `ANTIRUSTPASTE_CONTROL_FILE`,
 `ANTIRUSTPASTE_DEFAULTS_SUITE`, `ANTIRUSTPASTE_LAUNCH_AGENT_DIR`,
 `ANTIRUSTPASTE_THUMB_CACHE_DIR` and `ANTIRUSTPASTE_SHELL_HISTORY_DIR` redirect
-history, the MCP socket, preferences, the login item, the thumbnail/Quick Look
-cache and shell history.
+history, the MCP control endpoint, preferences, the login item, the
+thumbnail/Quick Look cache and shell history.
 
 **Why.** GUI tests otherwise read or destroy the operator's private history and
 change their next login. The overrides are small, explicit and inert when unset;
@@ -330,7 +330,8 @@ for text).
 tab is refreshed. Commands and clippings share one index, so an older build that
 does not know the `command` kind would quarantine the index as `.bak` instead of
 reading it; the current reader still accepts every older record. The configured
-limit applies per section, and every clipping clear keeps commands.
+limits apply independently to text, images and commands, and every clipping
+clear keeps commands.
 
 ## ADR-018: Pinned default palette uses warm yellow with a deep-violet marker
 
@@ -380,24 +381,30 @@ it has the same privacy properties (no encryption yet). Title editing is
 deliberately unavailable for shell commands, whose text comes from their history
 file.
 
-## ADR-020: MCP uses a private local socket serviced by the existing timer
+## ADR-020: MCP uses a private loopback HTTP endpoint serviced by the existing timer
 
-**Decision.** Keep the app as the only writer and expose control through a Unix
-domain socket in the history directory. A separate `antirustpaste-mcp` binary
-translates MCP stdio JSON-RPC into the local JSON-line protocol. The app accepts,
-reads and writes non-blocking connections from the existing 0.1 s main-thread
-timer. The socket is mode `0600`; there is no TCP listener. The MCP bridge is
+**Decision.** Keep the app as the only writer and expose control through a
+loopback HTTP endpoint. The app binds `TcpListener` to `127.0.0.1:0`, generates a
+random bearer token, and publishes the port, token and pid in a mode-`0600`
+`control.json` next to the history. A separate `antirustpaste-mcp` binary
+translates MCP stdio JSON-RPC into one authenticated `POST /control` request per
+tool call. The app parses bounded HTTP requests, checks the `Host` header and
+token, and dispatches on the existing 0.1 s main-thread timer. The MCP bridge is
 copied and signed inside the app bundle by `make-app.sh`.
 
 **Why.** Reading the JSON index directly from the MCP process would race the
 running app and could show stale data after a delete or pin. AppleScript/UI
-automation would be incomplete and fragile. A local socket lets every tool reuse
-the same `with_state` actions as the menus and keyboard, so storage, clipboard,
-Quick Look and preferences stay consistent. Using the existing timer avoids a
-second thread and keeps all AppKit work on the main thread.
+automation would be incomplete and fragile. A loopback HTTP endpoint lets every
+tool reuse the same `with_state` actions as the menus and keyboard, so storage,
+clipboard, Quick Look and preferences stay consistent. Unlike Rust `std` Unix
+sockets, `std::net` is available on macOS, Linux and Windows, so the transport
+does not block the Windows port.
 
-**Trade-off.** Any process running as the same user can connect to the socket and
-read the same clipboard history it could already read from the history files.
-MCP clients must therefore be trusted like local processes. Requests and
-responses are bounded, content is never logged, and the socket is removed on a
-normal quit. A stale path is only replaced when it is actually a Unix socket.
+**Trade-off.** Any process running as the same user can read the endpoint file
+and read the same clipboard history it could already read from the history
+files. MCP clients must therefore be trusted like local processes. The listener
+is loopback-only, requires `Authorization: Bearer`, rejects an unexpected `Host`
+header, sends no CORS headers, holds no LAN socket, and closes after one request.
+Requests and responses are bounded, the token is never logged, and the endpoint
+file is removed on a normal quit. A stale regular file is replaced at the next
+start; any other file at that path disables control.

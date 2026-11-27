@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::settings::HistoryLimits;
+
 const MAX_INDEX_BYTES: u64 = 64 * 1024 * 1024;
 pub(crate) const MAX_BLOB_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_PREVIEW_CHARS: usize = 200;
@@ -208,6 +210,37 @@ pub struct Store {
     pub clips: Vec<Clip>,
 }
 
+/// The three independent retention groups. Rich text, HTML, files and plain
+/// text share the text budget; only images and commands are separate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClipGroup {
+    Text,
+    Images,
+    Commands,
+}
+
+impl ClipGroup {
+    fn of(kind: ClipKind) -> Self {
+        match kind {
+            ClipKind::Command => Self::Commands,
+            ClipKind::Image => Self::Images,
+            ClipKind::Text
+            | ClipKind::RichText
+            | ClipKind::Html
+            | ClipKind::File
+            | ClipKind::Other => Self::Text,
+        }
+    }
+}
+
+fn limit_for(limits: HistoryLimits, group: ClipGroup) -> usize {
+    match group {
+        ClipGroup::Text => limits.text,
+        ClipGroup::Images => limits.images,
+        ClipGroup::Commands => limits.commands,
+    }
+}
+
 impl Store {
     /// Open the history at the user's data directory.
     ///
@@ -327,10 +360,18 @@ impl Store {
         }
     }
 
-    /// Insert a captured item. Returns true when the history changed.
+    /// Insert a captured item with the same limit for every history group.
+    /// The app uses [`Store::insert_with_limits`] so text, images and commands
+    /// each keep their own budget.
     pub fn insert(&mut self, captured: Captured, max: usize) -> bool {
+        self.insert_with_limits(captured, HistoryLimits::uniform(max))
+    }
+
+    /// Insert a captured item and trim only the group it belongs to.
+    pub fn insert_with_limits(&mut self, captured: Captured, limits: HistoryLimits) -> bool {
         let hash = hash_captured(&captured);
-        let is_command = captured.kind == ClipKind::Command;
+        let group = ClipGroup::of(captured.kind);
+        let max = limit_for(limits, group);
 
         // Re-copying something that is already in the history moves it to the
         // top instead of creating a duplicate. A pinned duplicate stays pinned
@@ -372,9 +413,9 @@ impl Store {
             self.clips.iter().filter(|clip| clip.pinned).count()
         };
         self.clips.insert(insert_at, clip);
-        // Clipboard items and shell commands have independent budgets, so a
-        // busy shell cannot evict the clipboard history (or the reverse).
-        self.trim_where(max, |clip| (clip.kind == ClipKind::Command) == is_command);
+        // Text, images and shell commands have independent budgets, so a run
+        // of screenshots cannot evict text and a busy shell cannot evict either.
+        self.trim_where(max, |clip| ClipGroup::of(clip.kind) == group);
         true
     }
 
@@ -383,10 +424,13 @@ impl Store {
         self.trim_where(max, |_| true);
     }
 
-    /// Trim both groups independently, keeping up to `max` of each.
-    pub fn trim_sections(&mut self, max: usize) {
-        self.trim_where(max, |clip| clip.kind == ClipKind::Command);
-        self.trim_where(max, |clip| clip.kind != ClipKind::Command);
+    /// Trim each group independently to its own budget.
+    pub fn trim_sections(&mut self, limits: HistoryLimits) {
+        self.trim_where(limits.commands, |clip| clip.kind == ClipKind::Command);
+        self.trim_where(limits.images, |clip| clip.kind == ClipKind::Image);
+        self.trim_where(limits.text, |clip| {
+            !matches!(clip.kind, ClipKind::Command | ClipKind::Image)
+        });
     }
 
     fn trim_where(&mut self, max: usize, group: impl Fn(&Clip) -> bool) {
@@ -1142,7 +1186,7 @@ mod tests {
         store.upsert_command("echo one", "zsh", 1, 10, true);
         store.upsert_command("echo two", "zsh", 2, 10, true);
 
-        store.trim_sections(1);
+        store.trim_sections(HistoryLimits::uniform(1));
 
         assert_eq!(
             store
@@ -1172,6 +1216,72 @@ mod tests {
                 .iter()
                 .any(|clip| clip.text.as_deref() == Some("echo two"))
         );
+    }
+
+    #[test]
+    fn text_and_image_budgets_are_independent() {
+        let temp = TempDir::new();
+        let mut store = temp.store();
+        let limits = HistoryLimits::new(1, 2, 1);
+
+        store.insert_with_limits(text_clip("text one"), limits);
+        store.insert_with_limits(text_clip("text two"), limits);
+        store.insert_with_limits(image_clip(b"image one"), limits);
+        store.insert_with_limits(image_clip(b"image two"), limits);
+        store.insert_with_limits(image_clip(b"image three"), limits);
+
+        let texts = store
+            .clips
+            .iter()
+            .filter(|clip| clip.kind != ClipKind::Image)
+            .count();
+        let images = store
+            .clips
+            .iter()
+            .filter(|clip| clip.kind == ClipKind::Image)
+            .count();
+        assert_eq!(texts, 1, "text has its own budget");
+        assert_eq!(images, 2, "images have their own budget");
+        assert!(
+            store
+                .clips
+                .iter()
+                .any(|clip| clip.text.as_deref() == Some("text two"))
+        );
+    }
+
+    #[test]
+    fn trim_sections_uses_each_budget() {
+        let temp = TempDir::new();
+        let mut store = temp.store();
+
+        store.insert(text_clip("text one"), 10);
+        store.insert(text_clip("text two"), 10);
+        store.insert(image_clip(b"image one"), 10);
+        store.insert(image_clip(b"image two"), 10);
+        store.upsert_command("echo one", "zsh", 1, 10, true);
+        store.upsert_command("echo two", "zsh", 2, 10, true);
+
+        store.trim_sections(HistoryLimits::new(1, 2, 1));
+
+        let texts = store
+            .clips
+            .iter()
+            .filter(|clip| !matches!(clip.kind, ClipKind::Command | ClipKind::Image))
+            .count();
+        let images = store
+            .clips
+            .iter()
+            .filter(|clip| clip.kind == ClipKind::Image)
+            .count();
+        let commands = store
+            .clips
+            .iter()
+            .filter(|clip| clip.kind == ClipKind::Command)
+            .count();
+        assert_eq!(texts, 1);
+        assert_eq!(images, 2);
+        assert_eq!(commands, 1);
     }
 
     #[test]

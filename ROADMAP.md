@@ -1,6 +1,6 @@
 # Roadmap
 
-> Last reviewed: 2026-11-26 · Current release: 0.4.0
+> Last reviewed: 2026-11-27 · Current release: 0.4.1
 
 This file records planned features. The implemented behaviour is in
 [docs/behavior.md](docs/behavior.md); platform status is in
@@ -35,8 +35,8 @@ Remaining:
 - [ ] Add the status-menu pause/resume recording toggle.
 - [ ] Add a Quick Look-style preview or an equivalent native viewer.
 - [ ] Add in-app text and title editing.
-- [ ] Bind the local control socket and ship the MCP bridge on Linux, reusing
-      `crates/antirustpaste-control`.
+- [ ] Bind the local loopback HTTP control endpoint and ship the MCP bridge on
+      Linux, reusing `crates/antirustpaste-control`.
 - [ ] Add Linux smoke coverage and platform tests.
 
 ## Planned: Windows port
@@ -58,9 +58,24 @@ the port exists.
       demand.
 - [ ] Scoped clear actions plus the Preferences History tab and disk usage.
 - [ ] Pause/resume recording from the tray and the Preferences switch.
-- [ ] Local control socket and MCP bridge through `antirustpaste-control`.
+- [ ] Local loopback HTTP control endpoint and MCP bridge through
+      `antirustpaste-control`.
 - [ ] PDF export with a native save dialog.
 - [ ] Automated tests, smoke script, README and platform documentation.
+
+## Implemented: independent history limits (0.4.1)
+
+- Text, images and commands have separate budgets: `max_text` (default 200),
+  `max_images` (default 200) and `max_commands` (default 500, the bash
+  `HISTSIZE` default). Trimming one group no longer deletes rows from another.
+- Preferences shows three fields. A value is committed on Return **and** when the
+  field loses focus, so clicking elsewhere or closing the window keeps it.
+- A reduction below the current count asks for confirmation when confirmations
+  are on, then trims the oldest unpinned rows in that group only.
+- An older shared `maxClips` becomes the text and image limit; commands keep the
+  larger of that value and 500, so an upgrade never deletes command history.
+- MCP still accepts `max_clips` as an alias for all three and exposes
+  `max_text`, `max_images` and `max_commands`.
 
 ## Implemented: terminal command history (0.3.1)
 
@@ -85,22 +100,23 @@ the port exists.
 - [ ] An explicit **Clear Commands** action, if the operator asks for one.
 - [ ] Show whether a command came from zsh or bash as a distinct glyph.
 
-## Implemented: MCP control (0.4.0)
+## Implemented: MCP control
 
 - A bundled `antirustpaste-mcp` stdio bridge exposes the running app through a
-  private Unix socket (`control.sock`, mode `0600`). The app services it from the
-  existing 0.1 s main-thread timer; there is no TCP listener and no new thread.
+  private loopback HTTP endpoint (`127.0.0.1`, ephemeral port). The app publishes
+  `control.json` with the port, bearer token and pid, mode `0600`, and services
+  requests from the existing 0.1 s main-thread timer. There is no new thread.
 - Tools cover history listing/reading, base64 blobs, copy/pin/delete, scoped
   clears, title and text edits, settings, ignored apps, popup/search/selection,
   Quick Look, PDF export and quit.
-- `crates/antirustpaste-control` owns the local protocol, socket discovery and
-  client. MCP calls reuse the UI actions and the same storage rules.
+- `crates/antirustpaste-control` owns the protocol, endpoint discovery, HTTP
+  framing and client. MCP calls reuse the UI actions and the same storage rules.
 - `make-app.sh` copies and signs the bridge into
   `AntiRustPaste.app/Contents/MacOS/antirustpaste-mcp`.
 
 ### Acceptance checks
 
-- [x] The app creates a private socket and removes it on normal quit.
+- [x] The app creates a private loopback endpoint and removes its file on normal quit.
 - [x] The MCP bridge answers `initialize`, `tools/list` and `tools/call`.
 - [x] Session, action and UI tools dispatch on the main thread without holding a
       `with_state` borrow across AppKit.
@@ -307,7 +323,7 @@ removed only by an explicit delete or clear action.
 - Do not implement these only in the macOS shell if the core can own the rules.
   Add tests to `antirustpaste-core` and `antirustpaste-pdf`.
 - The Linux GTK4/X11 shell uses the same core but does not yet bind the MCP
-  control socket or expose the scoped clear actions; see
+  control endpoint or expose the scoped clear actions; see
   [docs/platforms.md](docs/platforms.md).
 
 ## Non-goals for this roadmap

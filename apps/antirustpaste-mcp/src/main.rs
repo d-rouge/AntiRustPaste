@@ -1,8 +1,8 @@
 //! MCP stdio bridge for the running AntiRustPaste app.
 //!
 //! MCP clients launch this binary, which forwards tool calls over the app's
-//! private Unix control socket. The bridge never reads history files directly:
-//! the app remains the single writer and the UI stays in sync.
+//! private loopback HTTP control endpoint. The bridge never reads history files
+//! directly: the app remains the single writer and the UI stays in sync.
 
 use std::io::{self, BufRead, Write};
 
@@ -106,7 +106,7 @@ fn handle_request(method: &str, params: Value) -> Result<Value, McpError> {
                     "name": SERVER_NAME,
                     "version": env!("CARGO_PKG_VERSION")
                 },
-                "instructions": "Controls the running AntiRustPaste app through its private local control socket. History and clipboard contents are private; return only what the user needs."
+                "instructions": "Controls the running AntiRustPaste app through its private loopback HTTP control endpoint. History and clipboard contents are private; return only what the user needs."
             }))
         }
         "tools/list" => Ok(json!({ "tools": tools() })),
@@ -290,6 +290,9 @@ fn tools() -> Value {
                     "confirm_delete": { "type": "boolean" },
                     "paste_after_select": { "type": "boolean" },
                     "start_at_login": { "type": "boolean" },
+                    "max_text": { "type": "integer", "minimum": 1, "maximum": 9999 },
+                    "max_images": { "type": "integer", "minimum": 1, "maximum": 9999 },
+                    "max_commands": { "type": "integer", "minimum": 1, "maximum": 9999 },
                     "max_clips": { "type": "integer", "minimum": 1, "maximum": 9999 }
                 },
                 "additionalProperties": false

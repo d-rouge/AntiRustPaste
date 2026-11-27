@@ -29,7 +29,9 @@ pub struct PopupWidgets {
 #[derive(Clone)]
 pub struct PrefsWidgets {
     pub window: adw::PreferencesWindow,
-    pub max_clips: adw::SpinRow,
+    pub max_text: adw::SpinRow,
+    pub max_images: adw::SpinRow,
+    pub max_commands: adw::SpinRow,
     pub record: adw::SwitchRow,
     pub confirm_delete: adw::SwitchRow,
     pub paste_after_select: adw::SwitchRow,
@@ -207,10 +209,20 @@ fn tab_button(icon_name: &str, label_text: &str) -> gtk4::ToggleButton {
 }
 
 pub fn build_prefs(app: &adw::Application, settings: &Settings) -> PrefsWidgets {
-    let max_clips = adw::SpinRow::with_range(1.0, 9999.0, 10.0);
-    max_clips.set_title("History limit per section");
-    max_clips.set_subtitle("Applies independently to clippings and commands");
-    max_clips.set_value(settings.max_clips as f64);
+    let max_text = adw::SpinRow::with_range(1.0, 9999.0, 10.0);
+    max_text.set_title("Text history limit");
+    max_text.set_subtitle("Plain, rich text, HTML and file clippings");
+    max_text.set_value(settings.max_text as f64);
+
+    let max_images = adw::SpinRow::with_range(1.0, 9999.0, 10.0);
+    max_images.set_title("Image history limit");
+    max_images.set_subtitle("Images have their own budget");
+    max_images.set_value(settings.max_images as f64);
+
+    let max_commands = adw::SpinRow::with_range(1.0, 9999.0, 10.0);
+    max_commands.set_title("Command history limit");
+    max_commands.set_subtitle("500 matches the bash default; zsh usually keeps 1000");
+    max_commands.set_value(settings.max_commands as f64);
 
     let record = adw::SwitchRow::builder()
         .title("Record clipboard changes")
@@ -225,7 +237,9 @@ pub fn build_prefs(app: &adw::Application, settings: &Settings) -> PrefsWidgets 
     let history_group = adw::PreferencesGroup::builder()
         .title("History &amp; Recording")
         .build();
-    history_group.add(&max_clips);
+    history_group.add(&max_text);
+    history_group.add(&max_images);
+    history_group.add(&max_commands);
     history_group.add(&record);
     history_group.add(&confirm_delete);
 
@@ -290,7 +304,9 @@ pub fn build_prefs(app: &adw::Application, settings: &Settings) -> PrefsWidgets 
 
     PrefsWidgets {
         window,
-        max_clips,
+        max_text,
+        max_images,
+        max_commands,
         record,
         confirm_delete,
         paste_after_select,

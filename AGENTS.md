@@ -187,7 +187,7 @@ Cargo.toml                       workspace only
 apps/antirustpaste-macos/             primary AppKit shell
 apps/antirustpaste-mcp/               MCP stdio bridge
 apps/antirustpaste-linux/             GTK4/X11 shell (Linux only)
-crates/antirustpaste-control/         local JSON control protocol
+crates/antirustpaste-control/         local loopback HTTP control protocol
 crates/antirustpaste-core/            platform-neutral domain
 crates/antirustpaste-imaging/         pure-Rust image codec
 crates/antirustpaste-pdf/             pure-Rust image-to-PDF writer
@@ -197,16 +197,16 @@ crates/antirustpaste-pdf/             pure-Rust image-to-PDF writer
 | --- | --- |
 | `apps/antirustpaste-macos/src/main.rs` | Entry point, `--help`/`--version`, environment documentation |
 | `apps/antirustpaste-macos/src/app.rs` | App delegate, state, polling, hot key, menu/popup/preferences actions, panic guards |
-| `apps/antirustpaste-macos/src/app/control.rs` | Main-thread local control socket and MCP action dispatch |
+| `apps/antirustpaste-macos/src/app/control.rs` | Main-thread loopback HTTP control endpoint and MCP action dispatch |
 | `apps/antirustpaste-macos/src/views.rs` | `NSPanel`, history list, ignored-apps list, preferences window |
 | `apps/antirustpaste-macos/src/pasteboard.rs` | `NSPasteboard` read/write with size and type filters |
 | `apps/antirustpaste-macos/src/paste.rs` | CoreGraphics ⌘V synthesis and Accessibility prompt |
 | `apps/antirustpaste-macos/src/hotkey.rs` | Carbon `RegisterEventHotKey` wrapper and shortcut formatting |
 | `apps/antirustpaste-macos/src/settings.rs` | `NSUserDefaults`, modifier migration, LaunchAgent |
 | `apps/antirustpaste-macos/src/thumbnails.rs` | Boot-cleared cache path and `NSImage` loading |
-| `apps/antirustpaste-mcp/src/main.rs` | MCP stdio server, tool schemas and control-socket client use |
+| `apps/antirustpaste-mcp/src/main.rs` | MCP stdio server, tool schemas and loopback HTTP client use |
 | `apps/antirustpaste-linux/src/` | GTK4/X11 shell; no MCP bridge yet |
-| `crates/antirustpaste-control/src/lib.rs` | JSON-line control types, socket path, client and base64 |
+| `crates/antirustpaste-control/src/lib.rs` | HTTP control types, endpoint discovery, client and base64 |
 | `crates/antirustpaste-core/src/store.rs` | `Clip`/`Captured`, JSON index + blob files, dedup, trim, clear scopes, storage usage |
 | `crates/antirustpaste-core/src/settings.rs` | Platform-neutral `Settings`, `IgnoredApp`, `Modifiers` |
 | `crates/antirustpaste-core/src/filter.rs` | `Section` and `filter_indices` |
@@ -234,7 +234,7 @@ crates/antirustpaste-pdf/             pure-Rust image-to-PDF writer
 | Variable | Effect |
 | --- | --- |
 | `ANTIRUSTPASTE_DATA_DIR` | History directory (index + `blobs/`) |
-| `ANTIRUSTPASTE_CONTROL_SOCKET` | Absolute path for the local MCP control socket |
+| `ANTIRUSTPASTE_CONTROL_FILE` | Absolute path for the local MCP control endpoint file |
 | `ANTIRUSTPASTE_DEFAULTS_SUITE` | `NSUserDefaults` suite instead of the standard domain |
 | `ANTIRUSTPASTE_LAUNCH_AGENT_DIR` | Directory for `com.rustclip.app.plist` |
 | `ANTIRUSTPASTE_THUMB_CACHE_DIR` | Absolute, dedicated thumbnail cache directory (default `/tmp`, boot-cleared) |

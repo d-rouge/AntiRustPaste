@@ -360,12 +360,12 @@ fn reload_shell_history(state: &Rc<RefCell<AppState>>) {
         let mut st = state.borrow_mut();
         let cursor_path = st.store.dir().join("shell-history.json");
         let mut cursors = shell_history::load_cursors(&cursor_path);
-        let max_clips = st.settings.max_clips;
+        let max_commands = st.settings.max_commands;
         let now = shell_history::now_ms();
         let mut changed = false;
         let mut cursor_changed = false;
         for file in &files {
-            let read = shell_history::read_new(file, &mut cursors, max_clips, now);
+            let read = shell_history::read_new(file, &mut cursors, max_commands, now);
             if read.cursor_changed {
                 cursor_changed = true;
             }
@@ -374,7 +374,7 @@ fn reload_shell_history(state: &Rc<RefCell<AppState>>) {
                     &cmd.text,
                     cmd.shell.label(),
                     cmd.date_ms,
-                    max_clips,
+                    max_commands,
                     cmd.may_move,
                 ) {
                     changed = true;
@@ -592,17 +592,43 @@ fn wire_popup(state: &Rc<RefCell<AppState>>) {
 fn wire_prefs(state: &Rc<RefCell<AppState>>) {
     let prefs = state.borrow().prefs.clone();
 
-    let state_max = Rc::clone(state);
-    prefs.max_clips.connect_value_notify(move |spin| {
+    let state_text = Rc::clone(state);
+    prefs.max_text.connect_value_notify(move |spin| {
         let limit = spin.value().clamp(1.0, 9999.0) as usize;
         {
-            let mut st = state_max.borrow_mut();
-            st.settings.max_clips = limit;
-            st.store.trim_sections(limit);
+            let mut st = state_text.borrow_mut();
+            st.settings.max_text = limit;
+            st.store.trim_sections(st.settings.history_limits());
             st.store.save();
             settings::save(&st.settings);
         }
-        refresh_list(&state_max);
+        refresh_list(&state_text);
+    });
+
+    let state_images = Rc::clone(state);
+    prefs.max_images.connect_value_notify(move |spin| {
+        let limit = spin.value().clamp(1.0, 9999.0) as usize;
+        {
+            let mut st = state_images.borrow_mut();
+            st.settings.max_images = limit;
+            st.store.trim_sections(st.settings.history_limits());
+            st.store.save();
+            settings::save(&st.settings);
+        }
+        refresh_list(&state_images);
+    });
+
+    let state_commands = Rc::clone(state);
+    prefs.max_commands.connect_value_notify(move |spin| {
+        let limit = spin.value().clamp(1.0, 9999.0) as usize;
+        {
+            let mut st = state_commands.borrow_mut();
+            st.settings.max_commands = limit;
+            st.store.trim_sections(st.settings.history_limits());
+            st.store.save();
+            settings::save(&st.settings);
+        }
+        refresh_list(&state_commands);
     });
 
     let state_rec = Rc::clone(state);
@@ -696,8 +722,8 @@ fn wire_clipboard(state: &Rc<RefCell<AppState>>) {
             };
             let changed = {
                 let mut st = state_done.borrow_mut();
-                let limit = st.settings.max_clips;
-                let inserted = st.store.insert(item, limit);
+                let limits = st.settings.history_limits();
+                let inserted = st.store.insert_with_limits(item, limits);
                 if inserted {
                     st.store.save();
                 }

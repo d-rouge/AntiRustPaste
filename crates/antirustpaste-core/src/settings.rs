@@ -6,7 +6,37 @@
 use serde::{Deserialize, Serialize};
 
 pub const MAX_LIMIT: usize = 9999;
-pub const DEFAULT_LIMIT: usize = 200;
+/// How many text clippings (plain, rich, HTML and file rows) are kept.
+pub const DEFAULT_TEXT_LIMIT: usize = 200;
+/// How many image clippings are kept. Images have their own budget so a run of
+/// screenshots cannot push all text out of the history.
+pub const DEFAULT_IMAGE_LIMIT: usize = 200;
+/// How many shell commands are kept. 500 is the default `HISTSIZE` of bash;
+/// zsh users who keep 1000 (the macOS default `SAVEHIST`) can raise it.
+pub const DEFAULT_COMMAND_LIMIT: usize = 500;
+
+/// Independent retention budgets for the three history groups.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HistoryLimits {
+    pub text: usize,
+    pub images: usize,
+    pub commands: usize,
+}
+
+impl HistoryLimits {
+    pub const fn new(text: usize, images: usize, commands: usize) -> Self {
+        Self {
+            text,
+            images,
+            commands,
+        }
+    }
+
+    /// The same budget for every group. Useful for tests and simple callers.
+    pub const fn uniform(max: usize) -> Self {
+        Self::new(max, max, max)
+    }
+}
 
 /// A platform-neutral 8-bit sRGB colour. The macOS shell converts it to
 /// `NSColor`; other shells can use it directly.
@@ -88,7 +118,9 @@ pub struct IgnoredApp {
 
 #[derive(Clone, Debug)]
 pub struct Settings {
-    pub max_clips: usize,
+    pub max_text: usize,
+    pub max_images: usize,
+    pub max_commands: usize,
     pub record: bool,
     pub confirm_delete: bool,
     pub paste_after_select: bool,
@@ -105,7 +137,9 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            max_clips: DEFAULT_LIMIT,
+            max_text: DEFAULT_TEXT_LIMIT,
+            max_images: DEFAULT_IMAGE_LIMIT,
+            max_commands: DEFAULT_COMMAND_LIMIT,
             record: true,
             confirm_delete: true,
             paste_after_select: false,
@@ -122,6 +156,10 @@ impl Default for Settings {
 }
 
 impl Settings {
+    pub fn history_limits(&self) -> HistoryLimits {
+        HistoryLimits::new(self.max_text, self.max_images, self.max_commands)
+    }
+
     pub fn is_ignored(&self, bundle_id: Option<&str>) -> bool {
         let Some(bundle) = bundle_id else {
             return false;
@@ -172,6 +210,23 @@ mod tests {
         assert!(settings.is_ignored(Some("com.example.alpha")));
         assert!(!settings.is_ignored(Some("com.example.other")));
         assert!(!settings.is_ignored(None));
+    }
+
+    #[test]
+    fn history_limits_are_independent_and_have_command_default() {
+        let settings = Settings::default();
+        assert_eq!(settings.max_text, DEFAULT_TEXT_LIMIT);
+        assert_eq!(settings.max_images, DEFAULT_IMAGE_LIMIT);
+        assert_eq!(settings.max_commands, DEFAULT_COMMAND_LIMIT);
+        assert_eq!(
+            settings.history_limits(),
+            HistoryLimits::new(
+                DEFAULT_TEXT_LIMIT,
+                DEFAULT_IMAGE_LIMIT,
+                DEFAULT_COMMAND_LIMIT
+            )
+        );
+        assert_eq!(HistoryLimits::uniform(7), HistoryLimits::new(7, 7, 7));
     }
 
     #[test]

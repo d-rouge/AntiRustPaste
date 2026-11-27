@@ -1,6 +1,6 @@
 # Platforms
 
-> Last reviewed: 2026-11-26 · Version 0.4.0
+> Last reviewed: 2026-11-27 · Version 0.4.1
 
 AntiRustPaste is structured so the domain works on any desktop OS, while each OS
 has its own native shell. macOS is the primary, fully exercised implementation.
@@ -18,7 +18,7 @@ Cargo.toml                       workspace only
 apps/
   antirustpaste-macos/                implemented AppKit shell
     src/app.rs                   status item, state, actions, timers
-    src/app/control.rs           local MCP control socket
+    src/app/control.rs           local MCP loopback HTTP endpoint
     src/views.rs                 NSPanel, history list, Preferences
     src/pasteboard.rs            NSPasteboard read/write
     src/paste.rs                 CoreGraphics ⌘V + Accessibility
@@ -28,7 +28,7 @@ apps/
   antirustpaste-mcp/                MCP stdio bridge
   antirustpaste-linux/              GTK4 + X11 shell (Linux only)
 crates/
-  antirustpaste-control/             local JSON control protocol + client
+  antirustpaste-control/             local loopback HTTP control protocol + client
   antirustpaste-core/                 platform-neutral domain
     src/store.rs                 Clip/Captured, JSON + blobs, dedup, trim
     src/settings.rs              Settings, IgnoredApp, Modifiers
@@ -41,7 +41,7 @@ crates/
 
 Future shells are added as `apps/antirustpaste-windows`. They depend on core;
 core never depends on a shell. The MCP bridge is optional and only the macOS
-shell currently binds a control socket.
+shell currently binds a control endpoint.
 
 ## Boundaries
 
@@ -88,7 +88,7 @@ shell currently binds a control socket.
 | Shell command history | ✅ zsh/bash on demand | ⬜ PowerShell/`ConsoleHost_history.txt` | ✅ zsh/bash on demand |
 | Pause/resume from tray | ✅ status menu | ⬜ | ⬜ Preferences switch only |
 | Scoped clipping clears | ✅ all/text/images + unpinned variants | ⬜ | ⬜ section clear/all only |
-| Local MCP control | ✅ `antirustpaste-mcp` + Unix socket | ⬜ | ⬜ |
+| Local MCP control | ✅ `antirustpaste-mcp` + loopback HTTP | ⬜ | ⬜ |
 | Tests | ✅ 29 shell + 55 core + 12 imaging + 6 PDF + 2 control + 2 MCP | ⬜ | ⬜ builds only; not run here |
 
 Legend: ✅ done, ⬜ not implemented or not wired. The Linux row describes the
@@ -114,9 +114,11 @@ documentation, so treat its runtime behaviour as unverified here.
   and a **History** tab with scoped clipping deletes and disk usage.
 - Global shortcut through Carbon. Copying needs no permission; the optional
   paste uses CGEvent and Accessibility.
-- MCP control through a bundled `antirustpaste-mcp` bridge and a private local
-  Unix socket; no TCP port. The bridge can read and modify the same live state
-  as the menu-bar UI.
+- MCP control through a bundled `antirustpaste-mcp` bridge and a private
+  loopback HTTP endpoint. The app binds only `127.0.0.1`, publishes an ephemeral
+  port and bearer token in a mode-`0600` file, and never listens on a LAN
+  interface. The bridge can read and modify the same live state as the menu-bar
+  UI.
 - Thumbnail cache under `/tmp/AntiRustPaste-<user>-<hash>/thumbnails`, cleared by
   macOS at boot; one worker thread generates thumbnails.
 - Image export to PDF: a dedicated selection window, one A4 page per image,
@@ -206,7 +208,7 @@ the code intends, not as a verified runtime result:
   isolation.
 - PDF export: GTK file dialog plus the shared `antirustpaste-pdf` writer.
 
-Not wired in the Linux shell yet: the local MCP control socket, the scoped
+Not wired in the Linux shell yet: the local MCP control endpoint, the scoped
 clear/unpinned actions, a tray pause/resume item, Quick Look-style preview, and
 in-app text/title editing. Wayland clipboard monitoring and global shortcuts are
 limited by the compositor; document the tested desktop/compositor in any
@@ -245,9 +247,9 @@ handoff.
 - A cache directory policy and conversion of PNG bytes to the UI image type.
 - Keyboard handling, accessibility, screen/multi-display positioning, and
   click-away behaviour.
-- Optional: a private local control socket and MCP bridge. Only the macOS shell
-  currently implements this; a shell that adds it must reuse the core actions
-  and keep clipboard content out of logs.
+- Optional: a private loopback HTTP control endpoint and MCP bridge. Only the
+  macOS shell currently implements this; a shell that adds it must reuse the
+  core actions and keep clipboard content out of logs.
 
 ## Adding a platform: checklist
 
@@ -273,7 +275,7 @@ handoff.
 | Variable | Scope | Meaning |
 | --- | --- | --- |
 | `ANTIRUSTPASTE_DATA_DIR` | core | history directory override |
-| `ANTIRUSTPASTE_CONTROL_SOCKET` | macOS shell | absolute local MCP control socket |
+| `ANTIRUSTPASTE_CONTROL_FILE` | macOS shell | absolute local MCP control endpoint file |
 | `ANTIRUSTPASTE_DEFAULTS_SUITE` | macOS shell | isolated `NSUserDefaults` suite |
 | `ANTIRUSTPASTE_LAUNCH_AGENT_DIR` | macOS shell | login-item plist directory |
 | `ANTIRUSTPASTE_THUMB_CACHE_DIR` | shells | absolute, dedicated thumbnail cache |

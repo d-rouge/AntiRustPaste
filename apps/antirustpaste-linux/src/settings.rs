@@ -4,8 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use antirustpaste_core::{
-    DEFAULT_LIMIT, DEFAULT_PINNED_BACKGROUND, DEFAULT_PINNED_INDICATOR, IgnoredApp, MAX_LIMIT,
-    Modifiers, Rgb, Settings,
+    DEFAULT_COMMAND_LIMIT, DEFAULT_IMAGE_LIMIT, DEFAULT_PINNED_BACKGROUND,
+    DEFAULT_PINNED_INDICATOR, DEFAULT_TEXT_LIMIT, IgnoredApp, MAX_LIMIT, Modifiers, Rgb, Settings,
 };
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +18,11 @@ pub const DEFAULT_KEYSYM_V: u16 = 0x0076;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 struct StoredSettings {
-    max_clips: usize,
+    max_text: Option<usize>,
+    max_images: Option<usize>,
+    max_commands: Option<usize>,
+    /// Earlier versions stored one limit for every group.
+    max_clips: Option<usize>,
     record: bool,
     confirm_delete: bool,
     paste_after_select: bool,
@@ -36,7 +40,10 @@ impl Default for StoredSettings {
     fn default() -> Self {
         let defaults = linux_defaults();
         Self {
-            max_clips: defaults.max_clips,
+            max_text: None,
+            max_images: None,
+            max_commands: None,
+            max_clips: None,
             record: defaults.record,
             confirm_delete: defaults.confirm_delete,
             paste_after_select: defaults.paste_after_select,
@@ -55,7 +62,9 @@ impl Default for StoredSettings {
 pub fn linux_defaults() -> Settings {
     let modifiers = Modifiers::CONTROL | Modifiers::SHIFT;
     Settings {
-        max_clips: DEFAULT_LIMIT,
+        max_text: DEFAULT_TEXT_LIMIT,
+        max_images: DEFAULT_IMAGE_LIMIT,
+        max_commands: DEFAULT_COMMAND_LIMIT,
         record: true,
         confirm_delete: true,
         paste_after_select: false,
@@ -115,8 +124,32 @@ pub fn load_from(path: &Path) -> Settings {
         eprintln!("antirustpaste-linux: could not parse settings; using defaults");
         return linux_defaults();
     };
+    let legacy = stored
+        .max_clips
+        .filter(|value| *value > 0)
+        .map(|value| value.clamp(1, MAX_LIMIT));
     Settings {
-        max_clips: stored.max_clips.clamp(1, MAX_LIMIT),
+        max_text: stored
+            .max_text
+            .filter(|value| *value > 0)
+            .map(|value| value.clamp(1, MAX_LIMIT))
+            .or(legacy)
+            .unwrap_or(DEFAULT_TEXT_LIMIT),
+        max_images: stored
+            .max_images
+            .filter(|value| *value > 0)
+            .map(|value| value.clamp(1, MAX_LIMIT))
+            .or(legacy)
+            .unwrap_or(DEFAULT_IMAGE_LIMIT),
+        max_commands: stored
+            .max_commands
+            .filter(|value| *value > 0)
+            .map(|value| value.clamp(1, MAX_LIMIT))
+            .unwrap_or_else(|| {
+                legacy.map_or(DEFAULT_COMMAND_LIMIT, |value| {
+                    value.max(DEFAULT_COMMAND_LIMIT)
+                })
+            }),
         record: stored.record,
         confirm_delete: stored.confirm_delete,
         paste_after_select: stored.paste_after_select,
@@ -144,7 +177,10 @@ pub fn save_to(path: &Path, settings: &Settings) {
         let _ = fs::create_dir_all(parent);
     }
     let stored = StoredSettings {
-        max_clips: settings.max_clips.clamp(1, MAX_LIMIT),
+        max_text: Some(settings.max_text.clamp(1, MAX_LIMIT)),
+        max_images: Some(settings.max_images.clamp(1, MAX_LIMIT)),
+        max_commands: Some(settings.max_commands.clamp(1, MAX_LIMIT)),
+        max_clips: None,
         record: settings.record,
         confirm_delete: settings.confirm_delete,
         paste_after_select: settings.paste_after_select,
@@ -257,7 +293,9 @@ mod tests {
         let tmp = TempDir::new("settings");
         let path = tmp.0.join("settings.json");
         let mut settings = linux_defaults();
-        settings.max_clips = 50_000;
+        settings.max_text = 50_000;
+        settings.max_images = 42;
+        settings.max_commands = 0;
         settings.record = false;
         settings.paste_after_select = true;
         settings.add_ignored(IgnoredApp {
@@ -267,7 +305,9 @@ mod tests {
 
         save_to(&path, &settings);
         let loaded = load_from(&path);
-        assert_eq!(loaded.max_clips, MAX_LIMIT);
+        assert_eq!(loaded.max_text, MAX_LIMIT);
+        assert_eq!(loaded.max_images, 42);
+        assert_eq!(loaded.max_commands, 1);
         assert!(!loaded.record);
         assert!(loaded.paste_after_select);
         assert!(loaded.is_ignored(Some("org.keepassxc.KeePassXC")));
@@ -279,8 +319,25 @@ mod tests {
         let path = tmp.0.join("settings.json");
         let _ = fs::write(&path, b"{not valid json");
         let loaded = load_from(&path);
-        assert_eq!(loaded.max_clips, DEFAULT_LIMIT);
+        assert_eq!(loaded.max_text, DEFAULT_TEXT_LIMIT);
+        assert_eq!(loaded.max_images, DEFAULT_IMAGE_LIMIT);
+        assert_eq!(loaded.max_commands, DEFAULT_COMMAND_LIMIT);
         assert_eq!(loaded.hotkey_display, "Ctrl+Shift+V");
+    }
+
+    #[test]
+    fn legacy_shared_limit_migrates_to_clippings_and_command_floor() {
+        let tmp = TempDir::new("legacy-limit");
+        let path = tmp.0.join("settings.json");
+        let _ = fs::write(&path, br#"{"max_clips": 75}"#);
+        let loaded = load_from(&path);
+        assert_eq!(loaded.max_text, 75);
+        assert_eq!(loaded.max_images, 75);
+        assert_eq!(loaded.max_commands, DEFAULT_COMMAND_LIMIT);
+
+        let _ = fs::write(&path, br#"{"max_clips": 9999}"#);
+        let loaded = load_from(&path);
+        assert_eq!(loaded.max_commands, 9999);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Testing
 
-> Last reviewed: 2026-11-26 · Version 0.4.0
+> Last reviewed: 2026-11-27 · Version 0.4.1
 
 AntiRustPaste's primary shell is a macOS GUI app, but most of its logic is
 testable without a screen. The Linux shell shares the same core. The goal is
@@ -64,13 +64,13 @@ start cleanly.
 
 ## MCP bridge check
 
-Use a scratch app and a scratch socket; never point an MCP check at the real
-history.
+Use a scratch app and a scratch endpoint file; never point an MCP check at the
+real history.
 
 ```sh
 SCRATCH="$(mktemp -d)"
 export ANTIRUSTPASTE_DATA_DIR="$SCRATCH/data"
-export ANTIRUSTPASTE_CONTROL_SOCKET="$SCRATCH/control.sock"
+export ANTIRUSTPASTE_CONTROL_FILE="$SCRATCH/control.json"
 export ANTIRUSTPASTE_DEFAULTS_SUITE="com.antirustpaste.mcp-test.$$"
 export ANTIRUSTPASTE_LAUNCH_AGENT_DIR="$SCRATCH/LaunchAgents"
 export ANTIRUSTPASTE_THUMB_CACHE_DIR="$SCRATCH/thumbnails"
@@ -78,12 +78,17 @@ export ANTIRUSTPASTE_SHELL_HISTORY_DIR="$SCRATCH/shell"
 export ANTIRUSTPASTE_DISABLE_UPDATE_CHECK=1
 ./target/debug/antirustpaste &
 APP_PID=$!
+for _ in {1..50}; do
+  [ -f "$ANTIRUSTPASTE_CONTROL_FILE" ] && break
+  sleep 0.1
+done
 printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
   '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"status","arguments":{}}}' \
   | ./target/debug/antirustpaste-mcp
 kill "$APP_PID"
+wait "$APP_PID" 2>/dev/null || true
 ```
 
 The expected responses are an `initialize` result, a non-empty tool list and a
@@ -126,7 +131,8 @@ operator's `~/.zsh_history` or `~/.bash_history` into a fixture.
 | 9 | Delete with empty search | Confirmation (if enabled), then row and blob disappear |
 | 10 | Preferences → **History** → **Delete All Clippings…** | Confirmation, clippings and thumbnails removed; terminal commands remain |
 | 11 | Add an ignored app | New clips from it are not captured; existing ones remain |
-| 12 | Change the limit below the current count | Confirmation, oldest rows trimmed |
+| 12 | Change one limit below that group's current count, then click another field | The typed value is committed on focus loss, confirmation appears, only that group's oldest rows are trimmed |
+| 12a | Change only the Images limit and leave the Text and Commands counts alone | Text clippings and commands keep their previous limits and rows |
 | 13 | Record a new shortcut | Old one stops working, new one opens the popup |
 | 14 | Turn recording off, copy, turn it on | Nothing captured while off; later copies captured |
 | 14a | **Pause Recording** in the status menu, copy, then **Resume Recording** | Menu title and Preferences checkbox agree; the copy made while paused is not captured; later copies are |
@@ -255,7 +261,7 @@ crash fix.
 | Pasteboard has only concealed/transient types | Whole change ignored |
 | Pasteboard has 100 supported items | At most 25 captured |
 | Malformed `ignoredApps` JSON in defaults | Treated as an empty list |
-| Negative/huge `maxClips` in defaults | Clamped to 1–9999 at load |
+| Negative/huge `maxTextClips`, `maxImageClips` or `maxCommandClips` in defaults | Clamped to 1–9999 at load; a legacy `maxClips` migrates to text and images, and commands start at 500 or the old value if it was higher |
 | Hot-key combination already registered | Recording fails with an alert; old shortcut restored |
 | Target app quits between opening the popup and pasting | Falls back to the last non-AntiRustPaste app |
 | Accessibility denied | Clipboard updated, no keystroke, no crash |

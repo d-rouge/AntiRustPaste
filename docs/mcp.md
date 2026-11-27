@@ -3,25 +3,28 @@
 AntiRustPaste can be driven through the Model Context Protocol (MCP). The app
 stays the only writer of its history: an MCP client launches the
 `antirustpaste-mcp` bridge, and the bridge forwards tool calls over a private
-local Unix socket to the running app. The menu-bar UI, clipboard polling,
+loopback HTTP endpoint to the running app. The menu-bar UI, clipboard polling,
 settings and MCP calls all run on the same main thread, so they never race.
 
 MCP control is currently implemented in the macOS shell only. The Linux
-GTK4/X11 shell in the workspace does not bind the control socket yet.
+GTK4/X11 shell in the workspace does not bind the control endpoint yet.
 
 ## Enable and connect
 
-The control socket is created when the app starts. It lives next to the history:
+The app publishes its control endpoint when it starts. It lives next to the
+history:
 
 ```
-~/Library/Application Support/AntiRustPaste/control.sock
+~/Library/Application Support/AntiRustPaste/control.json
 ```
 
-The socket is mode `0600` and the app never opens a TCP port. No new network
-permission is needed. `ANTIRUSTPASTE_DATA_DIR` moves both the history and the
-socket; `ANTIRUSTPASTE_CONTROL_SOCKET` overrides the socket path (it must be
-absolute). The app and the MCP bridge must see the same value when either
-override is used.
+The file is mode `0600` and contains the loopback port, a random bearer token
+and the app pid. The app binds only to `127.0.0.1` on an ephemeral port; it does
+not listen on a LAN interface. `ANTIRUSTPASTE_DATA_DIR` moves both the history
+and the endpoint file; `ANTIRUSTPASTE_CONTROL_FILE` overrides the endpoint file
+path (it must be absolute). The app and the MCP bridge must see the same value
+when either override is used. The bridge reads the port and token from this file
+automatically; do not paste the token into a prompt or log.
 
 The MCP bridge is shipped inside the app bundle:
 
@@ -75,7 +78,7 @@ Settings and UI:
 | Tool | Purpose |
 | --- | --- |
 | `get_settings` | Preferences, shortcut and ignored apps |
-| `update_settings` | Recording, confirmations, auto-paste, login item and limit |
+| `update_settings` | Recording, confirmations, auto-paste, login item and the three history limits |
 | `add_ignored_app` / `remove_ignored_app` | Manage the ignored-app list |
 | `show_panel` / `hide_panel` | Show or hide the history popup |
 | `set_section` / `set_search` / `select_row` | Drive the popup list |
@@ -86,17 +89,23 @@ Settings and UI:
 Terminal commands are never removed by `clear_clips`; call `delete_clip` with a
 command id when that is explicitly wanted. The global shortcut and the update
 check remain UI actions because they need key recording and a release dialog.
+`update_settings` accepts independent `max_text`, `max_images` and
+`max_commands` values (1–9999); the legacy `max_clips` still sets all three.
 
 ## Safety and limits
 
-- The socket carries clipboard contents and settings. Treat every MCP client
+- The endpoint carries clipboard contents and settings. Treat every MCP client
   connected to it as trusted with the same data, exactly like a local process
   reading the history directory.
+- The listener is loopback-only, requires `Authorization: Bearer`, checks the
+  `Host` header against the bound port, sends no CORS headers and closes the
+  connection after one `POST /control`. Keep `control.json` private.
 - Requests are capped at 1 MiB and responses at 16 MiB. `get_clip_data` is
   capped at 8 MiB; larger blobs can be exported through `export_images_pdf`
   instead of copied into a tool result. Use an absolute destination path for
   `export_images_pdf`.
-- The app never logs clipboard text, titles or tool parameters.
-- A normal quit removes the socket. A stale socket is removed at the next start
-  only when it is actually a Unix socket; any other file at that path disables
-  the bridge rather than being replaced.
+- The app never logs clipboard text, titles, tool parameters or the token.
+- A normal quit removes the endpoint file. A stale regular file is replaced at
+  the next start; any other file at that path disables the bridge rather than
+  being replaced. The obsolete 0.4.0 `control.sock`, when present and actually a
+  Unix socket, is removed at startup.
